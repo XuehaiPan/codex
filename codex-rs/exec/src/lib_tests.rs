@@ -870,6 +870,7 @@ fn sample_thread_start_response() -> ThreadStartResponse {
             section_entered_at: None,
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             history_mode: Default::default(),
             model_provider: "openai".to_string(),
             model: None,

@@ -175,8 +175,7 @@ impl ChatWidget {
         }
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         if !from_replay {
-            self.request_status_line_branch_refresh();
-            self.request_status_line_git_summary_refresh();
+            self.invalidate_status_refresh();
             self.refresh_thread_usage_after_turn();
         }
         // Mark task stopped and request redraw now that all content is in history.
@@ -371,8 +370,7 @@ impl ChatWidget {
         self.request_pending_usage_output_insertion_after_stream_shutdown();
         self.status_state.pending_status_indicator_restore = false;
         self.safety_buffering_prompt = None;
-        self.request_status_line_branch_refresh();
-        self.request_status_line_git_summary_refresh();
+        self.invalidate_status_refresh();
         self.refresh_thread_usage_after_turn();
         self.maybe_show_pending_rate_limit_prompt();
     }

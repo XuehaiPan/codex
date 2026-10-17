@@ -611,6 +611,19 @@ async fn apply_metadata_update(
                         message: format!("failed to update memory mode for {thread_id}: {err}"),
                     })?;
             }
+            if let Some(selection) = patch.status_line_worktree.as_ref() {
+                let updated = state_db
+                    .set_thread_status_line_worktree(thread_id, selection.as_ref())
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!("failed to update status worktree for {thread_id}: {err}"),
+                    })?;
+                if !updated {
+                    return Err(ThreadStoreError::Internal {
+                        message: format!("thread metadata unavailable before status worktree update: {thread_id}"),
+                    });
+                }
+            }
             if let Some(daybreak_enabled) = patch.daybreak_enabled
                 && !state_db
                     .set_thread_daybreak_enabled(thread_id, daybreak_enabled)
@@ -742,10 +755,11 @@ fn sqlite_write_failure_should_block(patch: &ThreadMetadataPatch) -> bool {
     // transcript-derived metadata, thread names, and memory-mode indexing were log-only. Keep that
     // failure isolation so a corrupted optional state DB does not make JSONL transcript durability
     // look broken. Explicit git-only updates still require SQLite because partial git patches need
-    // the existing SQLite value to preserve unspecified fields. Project and Daybreak updates
-    // require SQLite because those preferences only exist in the state database.
+    // the existing SQLite value to preserve unspecified fields. Project, Daybreak, and reporting-worktree
+    // updates require SQLite because those preferences only exist in the state database.
     patch.project_id.is_some()
         || patch.daybreak_enabled.is_some()
+        || patch.status_line_worktree.is_some()
         || (patch.git_info.is_some() && !has_observed_metadata_facts(patch))
 }
 

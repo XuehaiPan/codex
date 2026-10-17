@@ -600,6 +600,18 @@ pub(crate) enum AppEvent {
         registered: tokio::sync::oneshot::Sender<()>,
     },
 
+    /// Validate the first live foreground command's reporting checkout.
+    StatusWorktreeCandidate {
+        thread_id: ThreadId,
+        view_id: uuid::Uuid,
+        cwd: PathBuf,
+    },
+    StatusWorktreeSelected {
+        token: crate::status_line_worktree::StatusSelectionToken,
+        selection: codex_protocol::StatusLineWorktree,
+        persisted: bool,
+    },
+
     /// Return a completed client-owned dynamic tool call to app server.
     DynamicToolCallCompleted {
         request_id: AppServerRequestId,
@@ -1618,15 +1630,17 @@ pub(crate) enum AppEvent {
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
-    /// Async update of the current git branch for status line rendering.
-    StatusLineBranchUpdated {
+    /// Validated local result; identity prevents obsolete probes from changing the current view.
+    StatusLineLocalUpdated {
+        token: crate::status_line_refresh::StatusProbeToken,
+        validation: Result<(), crate::status_line_worktree::StatusWorktreeError>,
         cwd: PathBuf,
-        branch: Option<String>,
+        snapshot: Option<crate::branch_summary::StatusLineLocalGit>,
     },
-    /// Async update of Git summary fields for status line rendering.
-    StatusLineGitSummaryUpdated {
-        cwd: PathBuf,
-        summary: crate::chatwidget::StatusLineGitSummary,
+    StatusLinePullRequestUpdated {
+        token: crate::status_line_refresh::StatusProbeToken,
+        identity: Option<crate::branch_summary::GitCheckoutIdentity>,
+        pull_request: Option<crate::branch_summary::StatusLinePullRequest>,
     },
     /// Async update of the workspace notification headline for status line rendering.
     StatusLineWorkspaceHeadlineUpdated {

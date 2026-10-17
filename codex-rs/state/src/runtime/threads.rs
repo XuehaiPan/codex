@@ -54,6 +54,7 @@ SELECT
     threads.section_entered_at_ms,
     threads.project_id,
     threads.daybreak_enabled,
+    threads.status_line_worktree,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -725,6 +726,22 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
+    /// Set or clear the reporting checkout without modifying execution or rollout metadata.
+    /// Normal upserts deliberately do not write this column, including after an explicit clear.
+    pub async fn set_thread_status_line_worktree(
+        &self,
+        thread_id: ThreadId,
+        selection: Option<&codex_protocol::StatusLineWorktree>,
+    ) -> anyhow::Result<bool> {
+        let value = selection.map(serde_json::to_string).transpose()?;
+        let result = sqlx::query("UPDATE threads SET status_line_worktree = ? WHERE id = ?")
+            .bind(value)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Set the user preference without changing rollout-derived thread metadata.
     pub async fn set_thread_daybreak_enabled(
         &self,
@@ -1362,6 +1379,7 @@ SELECT
     threads.section_entered_at_ms,
     threads.project_id,
     threads.daybreak_enabled,
+    threads.status_line_worktree,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url

@@ -78,6 +78,7 @@ async fn start_server(
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
         vec![
+            "set_status_line_worktree",
             "create_worktree",
             "get_worktree_creation_status",
             "list_worktrees"

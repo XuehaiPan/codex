@@ -257,6 +257,9 @@ pub(crate) fn tool_specs() -> Vec<DynamicToolSpec> {
                     defer_loading: true,
                 })
             })
+            .chain(std::iter::once(DynamicToolNamespaceTool::Function(
+                crate::status_line_worktree::tool_spec(),
+            )))
             .collect(),
     })]
 }

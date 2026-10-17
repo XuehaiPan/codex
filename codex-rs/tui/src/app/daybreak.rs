@@ -41,6 +41,7 @@ impl App {
                             params: codex_app_server_protocol::ThreadMetadataUpdateParams {
                                 thread_id: thread_id.to_string(),
                                 daybreak_enabled: Some(enabled),
+                                status_line_worktree: None,
                                 project_id: None,
                                 git_info: None,
                             },

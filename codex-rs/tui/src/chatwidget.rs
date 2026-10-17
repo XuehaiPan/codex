@@ -390,8 +390,10 @@ use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
 mod status_controls;
+mod status_refresh;
 mod status_surface_commands;
 mod status_surfaces;
+mod status_worktree;
 use self::status_surface_commands::StatusSurfaceOverrides;
 mod streaming;
 use self::status_surfaces::CachedProjectRootName;
@@ -730,6 +732,9 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    status_worktree: status_worktree::StatusWorktreeState,
+    status_refresh: crate::status_line_refresh::StatusLineRefreshState,
+    status_local_identity: Option<crate::branch_summary::GitCheckoutIdentity>,
     // App-server-backed command runner for status-line workspace metadata lookups.
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     // Instruction source files loaded for the current session, supplied by app-server.
@@ -762,20 +767,8 @@ pub(crate) struct ChatWidget {
     status_line_project_root_name_cache: Option<CachedProjectRootName>,
     // Cached git branch name for the status line (None if unknown).
     status_line_branch: Option<String>,
-    // CWD used to resolve the cached branch; change resets branch state.
-    status_line_branch_cwd: Option<PathBuf>,
-    // True while an async branch lookup is in flight.
-    status_line_branch_pending: bool,
-    // True once we've attempted a branch lookup for the current CWD.
-    status_line_branch_lookup_complete: bool,
     // Cached PR and branch-change summary for the active status-line cwd.
     status_line_git_summary: Option<StatusLineGitSummary>,
-    // CWD used to resolve the cached Git summary; change resets summary state.
-    status_line_git_summary_cwd: Option<PathBuf>,
-    // True while an async Git summary lookup is in flight.
-    status_line_git_summary_pending: bool,
-    // True once we've attempted a Git summary lookup for the current CWD.
-    status_line_git_summary_lookup_complete: bool,
     // Cached workspace notification headline for the status line.
     status_line_workspace_headline: Option<String>,
     // Request ID for the async workspace headline fetch currently in flight.
@@ -1198,6 +1191,7 @@ impl ChatWidget {
         {
             self.refresh_terminal_title();
         }
+        self.tick_status_refresh();
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();
         self.refresh_terminal_program_status();

@@ -114,6 +114,8 @@ impl ChatWidget {
         self.forked_from = session.forked_from_id;
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
+        self.status_worktree.environment_id = session.status_line_environment_id.clone();
+        self.restore_status_worktree(session.status_line_worktree.clone());
         self.config.cwd = session.cwd.clone();
         self.config.model_provider_id = session.model_provider_id.clone();
         self.set_daybreak_enabled(self.daybreak_enabled);

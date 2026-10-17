@@ -789,3 +789,24 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
     server.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn status_worktree_tool_works_without_managed_creation() {
+    let tools = non_delegation_tool_specs()
+        .into_iter()
+        .flat_map(|spec| match spec {
+            DynamicToolSpec::Namespace(namespace) => namespace
+                .tools
+                .into_iter()
+                .map(|tool| match tool {
+                    DynamicToolNamespaceTool::Function(function) => function.name,
+                })
+                .collect::<Vec<_>>(),
+            DynamicToolSpec::Function(function) => vec![function.name],
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        tools.iter().any(|name| name == "set_status_line_worktree"),
+        "reporting selection must be available without managed creation or delegation"
+    );
+}

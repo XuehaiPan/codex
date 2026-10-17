@@ -296,9 +296,11 @@ mod sparkle_submission_tests;
 mod startup_submission_tests;
 mod status_and_layout;
 mod status_command_tests;
+mod status_refresh;
 #[path = "tests/status_surface_command_tests.rs"]
 mod status_surface_command_tests;
 mod status_surface_previews;
+mod status_worktree;
 #[path = "tests/subagent_activity_tests.rs"]
 mod subagent_activity;
 #[path = "tests/terminal_program_status.rs"]

@@ -341,6 +341,7 @@ pub(crate) struct AppServerSession {
     managed_new_thread_defaults: Option<NewThreadModelDefaults>,
     external_agent_config_import_id: Mutex<Option<String>>,
     dynamic_tool_mcp: Option<Arc<DynamicToolMcpServer>>,
+    status_worktree_tools: crate::status_line_worktree::StatusLineWorktreeTools,
     pub(crate) worktree_source_config_builder:
         Option<Box<crate::legacy_core::config::ConfigBuilder>>,
 }
@@ -453,6 +454,7 @@ impl AppServerSession {
             managed_new_thread_defaults: None,
             external_agent_config_import_id: Mutex::default(),
             dynamic_tool_mcp: None,
+            status_worktree_tools: Default::default(),
             worktree_source_config_builder: None,
         }
     }
@@ -506,9 +508,24 @@ impl AppServerSession {
         };
         let services = crate::dynamic_tools_mcp::ToolServices {
             task_tools: !self.uses_embedded_app_server(),
+            status_worktrees: self.status_worktree_tools.clone(),
             worktrees,
         };
-        if !services.task_tools && services.worktrees.is_none() {
+        // Reporting is optional. Preserve startup when policy or a user server owns this
+        // namespace; never bypass the managed restrictions to advertise the selection tool.
+        let reporting_only = !services.task_tools && services.worktrees.is_none();
+        if reporting_only
+            && (config.mcp_servers.get().contains_key(services.namespace())
+                || config
+                    .config_layer_stack
+                    .requirements()
+                    .mcp_servers
+                    .as_ref()
+                    .is_some_and(|requirements| {
+                        !requirements.value.contains_key(services.namespace())
+                    }))
+        {
+            tracing::warn!("status worktree tool unavailable under the configured MCP policy");
             return Ok(());
         }
         if config.mcp_servers.get().contains_key(services.namespace()) {
@@ -553,19 +570,30 @@ impl AppServerSession {
             });
         thread_start_params.daybreak_enabled =
             daybreak_launch_override.then_some(config.daybreak_enabled);
-        self.dynamic_tool_mcp = Some(Arc::new(
-            DynamicToolMcpServer::start(
-                self.request_handle(),
-                thread_start_params,
-                config.features.get().clone(),
-                app_event_tx,
-                status_updates,
-                managed_requirement,
-                services,
-            )
-            .await?,
-        ));
+        let server = DynamicToolMcpServer::start(
+            self.request_handle(),
+            thread_start_params,
+            config.features.get().clone(),
+            app_event_tx,
+            status_updates,
+            managed_requirement,
+            services,
+        )
+        .await;
+        match server {
+            Ok(server) => self.dynamic_tool_mcp = Some(Arc::new(server)),
+            Err(error) if reporting_only => {
+                tracing::warn!(%error, "status worktree tool unavailable");
+            }
+            Err(error) => return Err(error),
+        }
         Ok(())
+    }
+
+    pub(crate) fn status_worktree_tools(
+        &self,
+    ) -> crate::status_line_worktree::StatusLineWorktreeTools {
+        self.status_worktree_tools.clone()
     }
 
     pub(crate) fn thread_tool_transport(&self) -> ThreadToolTransport {
@@ -580,6 +608,7 @@ impl AppServerSession {
 
     pub(crate) fn with_thread_tool_transport(mut self, transport: ThreadToolTransport) -> Self {
         if let ThreadToolTransport::Mcp(server) = transport {
+            self.status_worktree_tools = server.status_worktrees.clone();
             self.dynamic_tool_mcp = Some(server);
         }
         self
@@ -1333,6 +1362,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("failed to delete session")?;
+        self.status_worktree_tools.forget_thread(thread_id);
         Ok(())
     }
 
@@ -1364,6 +1394,7 @@ impl AppServerSession {
                     thread_id: thread_id.to_string(),
                     project_id: None,
                     daybreak_enabled: None,
+                    status_line_worktree: None,
                     git_info: Some(ThreadMetadataGitInfoUpdateParams {
                         sha: None,
                         branch: Some(Some(branch)),
@@ -2423,6 +2454,7 @@ async fn thread_session_state_from_thread_start_response(
         local_settings,
     )
     .await?;
+    session.update_status_line_context(&response.thread);
     session.daybreak_enabled = response
         .thread
         .daybreak_enabled
@@ -2462,6 +2494,7 @@ async fn thread_session_state_from_thread_resume_response(
     )
     .await?;
     session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
+    session.update_status_line_context(&response.thread);
     session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
     Ok(session)
 }
@@ -2498,6 +2531,7 @@ async fn thread_session_state_from_thread_fork_response(
         local_settings,
     )
     .await?;
+    session.update_status_line_context(&response.thread);
     session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
     Ok(session)
 }
@@ -2563,6 +2597,8 @@ async fn thread_session_state_from_thread_response(
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
+        status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+        status_line_worktree: None,
         daybreak_enabled: false,
         windows_sandbox_host,
         thread_id,
@@ -4183,6 +4219,7 @@ mod tests {
                 section_entered_at: None,
                 project_id: None,
                 daybreak_enabled: None,
+                status_line_worktree: None,
                 history_mode: Default::default(),
                 model_provider: "openai".to_string(),
                 model: None,

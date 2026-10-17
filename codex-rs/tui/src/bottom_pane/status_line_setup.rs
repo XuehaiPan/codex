@@ -64,7 +64,7 @@ pub(crate) enum StatusLineItem {
     /// Current reasoning level.
     Reasoning,
 
-    /// Current working directory path.
+    /// Selected reporting directory, or the session directory when no selection is usable.
     CurrentDir,
 
     /// Project root directory (if detected).
@@ -78,13 +78,14 @@ pub(crate) enum StatusLineItem {
     /// Hostname of the machine running Codex.
     Hostname,
 
-    /// Current git branch name (if in a repository).
+    /// Git branch in the effective reporting directory (if available).
     GitBranch,
 
-    /// Open pull request number for the current branch.
+    /// Open pull request number for the reporting checkout branch.
     PullRequestNumber,
 
-    /// Committed branch diff stats relative to the default branch.
+    /// Net text changes from the default-branch merge base to current checkout contents.
+    /// Includes uncommitted and non-ignored untracked files; zero does not imply a clean tree.
     BranchChanges,
 
     /// Compact runtime run-state text.
@@ -167,15 +168,15 @@ impl StatusLineItem {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
             StatusLineItem::Reasoning => "Current reasoning level",
-            StatusLineItem::CurrentDir => "Current working directory",
+            StatusLineItem::CurrentDir => "Selected reporting directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::Hostname => "Current machine hostname (omitted when unavailable)",
-            StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            StatusLineItem::GitBranch => "Reporting checkout branch (omitted when unavailable)",
             StatusLineItem::PullRequestNumber => {
-                "Open pull request number for the current branch (omitted when unavailable)"
+                "Open PR for the reporting checkout branch (omitted when unavailable)"
             }
             StatusLineItem::BranchChanges => {
-                "Committed branch changes against the default branch (omitted when unavailable)"
+                "Net branch text changes, including uncommitted files (omitted when incomplete)"
             }
             StatusLineItem::Status => "Compact session run-state text (Ready, Working, Thinking)",
             StatusLineItem::Permissions => "Active permission profile or sandbox mode",

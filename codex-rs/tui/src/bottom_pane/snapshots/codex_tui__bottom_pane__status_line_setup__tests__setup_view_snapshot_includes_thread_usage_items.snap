@@ -15,7 +15,7 @@ expression: "render_lines(&view, 100)"
   [ ] model                  Current model name                                                     
   [ ] model-with-reasoning   Current model name with reasoning level                                
   [ ] reasoning              Current reasoning level                                                
-  [ ] current-dir            Current working directory                                              
+  [ ] current-dir            Selected reporting directory                                           
 ↓                                                                                                   
   5.2 credits · ~$1.82                                                                              
   space toggle · ←/→ reorder · enter save · esc cancel

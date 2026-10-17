@@ -655,6 +655,9 @@ pub struct StoredThread {
     /// User-selected Daybreak preference, absent until explicitly set.
     #[serde(default)]
     pub daybreak_enabled: Option<bool>,
+    /// Saved reporting checkout, independent of the execution cwd.
+    #[serde(default)]
+    pub status_line_worktree: Option<codex_protocol::StatusLineWorktree>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
     /// CLI version captured for the thread.
@@ -830,6 +833,13 @@ pub struct ThreadMetadataPatch {
     pub project_id: ClearableField<String>,
     /// User-selected Daybreak preference; omission leaves it unchanged.
     pub daybreak_enabled: Option<bool>,
+    /// Omit to preserve, provide a checkout to set, or use null to clear reporting selection.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_option"
+    )]
+    pub status_line_worktree: ClearableField<codex_protocol::StatusLineWorktree>,
 }
 
 impl ThreadMetadataPatch {
@@ -922,6 +932,9 @@ impl ThreadMetadataPatch {
         if next.project_id.is_some() {
             self.project_id = next.project_id;
         }
+        if next.status_line_worktree.is_some() {
+            self.status_line_worktree = next.status_line_worktree;
+        }
         if next.daybreak_enabled.is_some() {
             self.daybreak_enabled = next.daybreak_enabled;
         }
@@ -959,6 +972,7 @@ impl ThreadMetadataPatch {
             && self.memory_mode.is_none()
             && self.project_id.is_none()
             && self.daybreak_enabled.is_none()
+            && self.status_line_worktree.is_none()
     }
 }
 

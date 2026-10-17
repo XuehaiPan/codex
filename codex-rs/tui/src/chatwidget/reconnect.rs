@@ -17,6 +17,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn pause_for_disconnect(&mut self) {
+        self.set_status_worktree_live(false);
         self.permission_discovery = None;
         self.invalidate_permission_discovery();
         self.cancel_startup_submission();
@@ -131,6 +132,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn pause_unavailable_thread(&mut self) {
+        self.set_status_worktree_live(false);
         if let Some(questions) = &mut self.bottom_pane.questions {
             questions.delivery_enabled = false;
         }

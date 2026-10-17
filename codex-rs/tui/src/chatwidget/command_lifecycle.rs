@@ -133,6 +133,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_command_execution_completed(&mut self, item: ThreadItem) {
+        self.invalidate_status_refresh();
         let ThreadItem::CommandExecution {
             id,
             process_id,

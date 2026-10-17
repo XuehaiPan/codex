@@ -4639,6 +4639,7 @@ async fn thread_resume_prefers_persisted_git_metadata_for_local_threads() -> Res
             thread_id: thread_id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/pr-branch".to_string())),

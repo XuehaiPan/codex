@@ -18527,6 +18527,37 @@
       ],
       "type": "object"
     },
+    "StatusLineWorktree": {
+      "description": "Saved path selection for status surfaces. Clients validate it on the workspace host before use. A missing checkout does not erase the selection: the same path may become available again.",
+      "properties": {
+        "environmentId": {
+          "description": "Environment that owns these paths; never resolve them on another host.",
+          "type": "string"
+        },
+        "gitCommonDir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacyAppPathString"
+            }
+          ],
+          "description": "Absolute common Git directory identifying the repository, not a checkout incarnation."
+        },
+        "root": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LegacyAppPathString"
+            }
+          ],
+          "description": "Absolute checkout root used for reporting, not the execution cwd."
+        }
+      },
+      "required": [
+        "environmentId",
+        "gitCommonDir",
+        "root"
+      ],
+      "type": "object"
+    },
     "StrictReviewRequiredNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -18911,6 +18942,18 @@
             }
           ],
           "description": "Current runtime status for the thread."
+        },
+        "statusLineWorktree": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StatusLineWorktree"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Saved status-surface checkout. Does not change thread cwd or execution permissions."
         },
         "threadSource": {
           "anyOf": [
@@ -21141,6 +21184,24 @@
             }
           ],
           "description": "Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value."
+        },
+        "statusLineWorktree": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/StatusLineWorktree"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Reporting checkout only: omit to preserve, null to clear, or provide a record to set. Updating this field is allowed during a turn and never changes execution settings."
         },
         "threadId": {
           "type": "string"

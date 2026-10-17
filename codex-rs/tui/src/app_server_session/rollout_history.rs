@@ -255,6 +255,10 @@ impl AppServerSession {
         )
         .await?;
         started.session.fork_parent_title = fork_parent_title;
+        if started.session.status_line_worktree.is_none() {
+            started.session.status_line_worktree =
+                self.status_worktree_tools.transient_selection(thread_id);
+        }
         if self.task_tools_available(thread_id) {
             self.remember_task_tool_thread(thread_id);
             started.task_tools_available = true;

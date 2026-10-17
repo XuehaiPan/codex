@@ -87,6 +87,8 @@ impl App {
             session
         } else {
             ThreadSessionState {
+                status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+                status_line_worktree: None,
                 daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id,
@@ -115,6 +117,7 @@ impl App {
         session.windows_sandbox_host =
             crate::windows_sandbox::host_from_environments(thread.environments.as_deref());
         session.thread_id = thread_id;
+        session.update_status_line_context(thread);
         session.daybreak_enabled = thread.daybreak_enabled.unwrap_or(false);
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
@@ -173,6 +176,8 @@ mod tests {
 
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
@@ -425,6 +430,7 @@ mod tests {
             section_entered_at: None,
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             history_mode: Default::default(),
             model_provider: "read-provider".to_string(),
             model: None,

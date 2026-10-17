@@ -42,7 +42,7 @@ pub(crate) enum TerminalTitleItem {
     /// Project root name, or a compact cwd fallback.
     #[strum(to_string = "project-name", serialize = "project")]
     Project,
-    /// Current working directory path.
+    /// Selected reporting directory, or the session directory when no selection is usable.
     CurrentDir,
     /// Terminal-title activity indicator while active.
     #[strum(to_string = "activity", serialize = "spinner")]
@@ -55,7 +55,7 @@ pub(crate) enum TerminalTitleItem {
     /// Current thread title (if available).
     #[strum(to_string = "thread-title", serialize = "thread")]
     Thread,
-    /// Current git branch (if available).
+    /// Git branch in the effective reporting directory (if available).
     GitBranch,
     /// Percentage of context window remaining.
     ContextRemaining,
@@ -101,7 +101,7 @@ impl TerminalTitleItem {
         match self {
             TerminalTitleItem::AppName => "Codex app name",
             TerminalTitleItem::Project => "Project name (falls back to current directory name)",
-            TerminalTitleItem::CurrentDir => "Current working directory",
+            TerminalTitleItem::CurrentDir => "Selected reporting directory",
             TerminalTitleItem::Spinner => {
                 "Spinner while working, action-required message while blocked"
             }
@@ -110,7 +110,7 @@ impl TerminalTitleItem {
             }
             TerminalTitleItem::ThreadName => "Current thread name (omitted when unnamed)",
             TerminalTitleItem::Thread => "Current thread title, or thread identifier when unnamed",
-            TerminalTitleItem::GitBranch => "Current Git branch (omitted when unavailable)",
+            TerminalTitleItem::GitBranch => "Reporting checkout branch (omitted when unavailable)",
             TerminalTitleItem::ContextRemaining => {
                 "Percentage of context window remaining (omitted when unknown)"
             }

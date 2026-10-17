@@ -117,6 +117,7 @@ pub(super) fn sample_thread_with_metadata(
         section_entered_at: None,
         project_id: None,
         daybreak_enabled: None,
+        status_line_worktree: None,
         history_mode: Default::default(),
         model_provider: "openai".to_string(),
         model: None,

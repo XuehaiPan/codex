@@ -1946,6 +1946,7 @@ impl ThreadRequestProcessor {
             project_id,
             git_info,
             daybreak_enabled,
+            status_line_worktree,
         } = params;
         let thread_uuid = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
@@ -1968,7 +1969,11 @@ impl ThreadRequestProcessor {
             }
         }
 
-        if git_info.is_none() && project_id.is_none() && daybreak_enabled.is_none() {
+        if git_info.is_none()
+            && project_id.is_none()
+            && daybreak_enabled.is_none()
+            && status_line_worktree.is_none()
+        {
             return Err(invalid_request(
                 "thread metadata update must include at least one field",
             ));
@@ -2047,6 +2052,7 @@ impl ThreadRequestProcessor {
                 git_info,
                 project_id: project_update.clone(),
                 daybreak_enabled,
+                status_line_worktree,
                 ..Default::default()
             };
             let updated_thread = self
@@ -6442,6 +6448,7 @@ pub(crate) fn thread_from_stored_thread(
         git_info,
         name: thread.name,
         daybreak_enabled: thread.daybreak_enabled,
+        status_line_worktree: thread.status_line_worktree,
         turns: Vec::new(),
     };
     (thread, history)
@@ -6628,6 +6635,7 @@ fn build_thread_from_snapshot(
         git_info: None,
         name: None,
         daybreak_enabled: None,
+        status_line_worktree: None,
         turns: Vec::new(),
     }
 }

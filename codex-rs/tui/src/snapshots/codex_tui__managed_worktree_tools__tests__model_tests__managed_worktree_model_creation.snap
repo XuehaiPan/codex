@@ -14,11 +14,12 @@ Settings:
   store: false
   stream: true
   tool_choice: "auto"
-  tools (1; hash=291b147361c7e927):
-    - namespace/mcp__codex_worktrees: Tools in the mcp__codex_worktrees namespace.; hash=51011289080f7067
+  tools (1; hash=40389d58e50c24d3):
+    - namespace/mcp__codex_worktrees: Tools in the mcp__codex_worktrees namespace.; hash=f5949e309ff9265b
       - function/create_worktree
       - function/get_worktree_creation_status
       - function/list_worktrees
+      - function/set_status_line_worktree
 -- request 1 (request) --
 00:message/developer:
     You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open...I. You are expected to be precise, safe, and helpful. [hash=5125daec1ed78d99]
@@ -38,9 +39,10 @@ Settings:
     - Do not use python scripts to attempt to output larger chunks of a file.
 
 
-01:message/developer[2]:
-    [01] <SKILLS_INSTRUCTIONS>
-    [02] <PERMISSIONS_INSTRUCTIONS>
+01:message/developer[3]:
+    [01] When you start implementing in a linked Git worktree, call set_status_line_worktree with its absolute wo...with persisted: false lasts only for this connection. [hash=ff4770f72be0375a]
+    [02] <SKILLS_INSTRUCTIONS>
+    [03] <PERMISSIONS_INSTRUCTIONS>
 02:message/user:
     <ENVIRONMENT_CONTEXT>
 03:message/user:
@@ -57,7 +59,7 @@ Settings:
 -- request 4 (request) --
 08:function_call/mcp__codex_worktrees.get_worktree_creation_status:{"operationId":"<UUID 1>"}
 09:function_call_output:Wall time: <DURATION> seconds
-    Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...citly and request filesystem permissions if needed."} [hash=b855a2f161fd3a36]
+    Output: | {"type":"created","worktree":{"root":"<WORKTREE>","workspaceRoot":"<WORKTREE>/","sourceCwd":"<SOURCE>"},...ts there. Request filesystem permissions if needed."} [hash=7e689b92f740d84e]
 -- request 5 (request) --
 10:message/assistant:
     Done.

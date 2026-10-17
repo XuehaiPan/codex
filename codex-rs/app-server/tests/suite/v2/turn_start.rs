@@ -726,6 +726,10 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
     )
     .await?;
 
+    let reporting_selection =
+        serde_json::from_value::<codex_protocol::StatusLineWorktree>(serde_json::json!({
+            "environmentId": "local", "root": "/reporting-only", "gitCommonDir": "/repo/.git"
+        }))?;
     let updated: ThreadMetadataUpdateResponse = mcp
         .request(|request_id| ClientRequest::ThreadMetadataUpdate {
             request_id,
@@ -734,9 +738,21 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                 project_id: None,
                 git_info: None,
                 daybreak_enabled: Some(false),
+                status_line_worktree: Some(Some(reporting_selection.clone())),
             },
         })
         .await?;
+    assert_eq!(
+        updated.thread.status_line_worktree,
+        Some(reporting_selection)
+    );
+    assert_eq!(updated.thread.cwd, thread.cwd);
+    assert_eq!(updated.thread.environments, thread.environments);
+    assert_eq!(updated.thread.session_id, thread.session_id);
+    assert!(matches!(
+        updated.thread.status,
+        codex_app_server_protocol::ThreadStatus::Active { .. }
+    ));
     assert_eq!(
         (updated.thread.id, updated.thread.daybreak_enabled),
         (thread.id.clone(), Some(false))

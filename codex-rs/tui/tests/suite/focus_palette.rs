@@ -313,12 +313,49 @@ impl PtyCodex {
         )
     }
 
+    /// Start the production CLI with per-child environment overrides, without changing the test
+    /// process environment or falling back to another executable.
+    pub(super) fn start_cli_with_env(
+        repo_root: &Path,
+        codex_home: TempDir,
+        extra_args: &[&str],
+        env: &[(std::ffi::OsString, Option<std::ffi::OsString>)],
+    ) -> Result<Self> {
+        let codex = codex_utils_cargo_bin::cargo_bin("codex")
+            .context("build codex-cli and set CARGO_BIN_EXE_codex to its executable")?;
+        Self::start_binary_with_env(&codex, repo_root, codex_home, extra_args, None, env)
+    }
+
+    pub(super) fn restart_cli(
+        &mut self,
+        repo_root: &Path,
+        extra_args: &[&str],
+        env: &[(std::ffi::OsString, Option<std::ffi::OsString>)],
+    ) -> Result<()> {
+        self.child.kill()?;
+        self.child.wait()?;
+        let home = std::mem::replace(&mut self._codex_home, tempfile::tempdir()?);
+        *self = Self::start_cli_with_env(repo_root, home, extra_args, env)?;
+        Ok(())
+    }
+
     fn start_binary(
         codex: &Path,
         repo_root: &Path,
         codex_home: TempDir,
         extra_args: &[&str],
         editor: Option<&Path>,
+    ) -> Result<Self> {
+        Self::start_binary_with_env(codex, repo_root, codex_home, extra_args, editor, &[])
+    }
+
+    fn start_binary_with_env(
+        codex: &Path,
+        repo_root: &Path,
+        codex_home: TempDir,
+        extra_args: &[&str],
+        editor: Option<&Path>,
+        env: &[(std::ffi::OsString, Option<std::ffi::OsString>)],
     ) -> Result<Self> {
         let mut master_fd = -1;
         let mut slave_fd = -1;
@@ -354,6 +391,13 @@ impl PtyCodex {
         let mut command = Command::new(codex);
         if let Some(editor) = editor {
             command.env("VISUAL", editor);
+        }
+        for (key, value) in env {
+            if let Some(value) = value {
+                command.env(key, value);
+            } else {
+                command.env_remove(key);
+            }
         }
         let child = command
             .args(extra_args)

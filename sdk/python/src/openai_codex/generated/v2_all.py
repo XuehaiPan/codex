@@ -5027,6 +5027,30 @@ class SpendControlLimitSnapshot(BaseModel):
     used: str
 
 
+class StatusLineWorktree(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    environment_id: Annotated[
+        str,
+        Field(
+            alias="environmentId",
+            description="Environment that owns these paths; never resolve them on another host.",
+        ),
+    ]
+    git_common_dir: Annotated[
+        LegacyAppPathString,
+        Field(
+            alias="gitCommonDir",
+            description="Absolute common Git directory identifying the repository, not a checkout incarnation.",
+        ),
+    ]
+    root: Annotated[
+        LegacyAppPathString,
+        Field(description="Absolute checkout root used for reporting, not the execution cwd."),
+    ]
+
+
 class StrictReviewRequiredNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5736,6 +5760,13 @@ class ThreadMetadataUpdateParams(BaseModel):
         Field(
             alias="gitInfo",
             description="Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value.",
+        ),
+    ] = None
+    status_line_worktree: Annotated[
+        StatusLineWorktree | None,
+        Field(
+            alias="statusLineWorktree",
+            description="Reporting checkout only: omit to preserve, null to clear, or provide a record to set. Updating this field is allowed during a turn and never changes execution settings.",
         ),
     ] = None
     thread_id: Annotated[str, Field(alias="threadId")]
@@ -12432,6 +12463,13 @@ class Thread(BaseModel):
         ),
     ]
     status: Annotated[ThreadStatus, Field(description="Current runtime status for the thread.")]
+    status_line_worktree: Annotated[
+        StatusLineWorktree | None,
+        Field(
+            alias="statusLineWorktree",
+            description="Saved status-surface checkout. Does not change thread cwd or execution permissions.",
+        ),
+    ] = None
     thread_source: Annotated[
         ThreadSource | None,
         Field(

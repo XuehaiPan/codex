@@ -11,8 +11,8 @@ expression: "render_lines(&view, 72)"
 › [x] Use theme colors      Apply colors from the active /theme         
   ───────────────────────                                               
   [x] model                 Current model name                          
-  [x] current-dir           Current working directory                   
-  [x] git-branch            Current Git branch (omitted when unavailabl…
+  [x] current-dir           Selected reporting directory                
+  [x] git-branch            Reporting checkout branch (omitted when una…
   [ ] model-with-reasoning  Current model name with reasoning level     
   [ ] reasoning             Current reasoning level                     
   [ ] project-name          Project name (omitted when unavailable)     

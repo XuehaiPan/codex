@@ -1100,6 +1100,7 @@ impl App {
                 }
             }
             TuiEvent::FocusGained => {
+                self.chat_widget.invalidate_status_refresh();
                 self.recap.note_focus_gained();
             }
             _ => {}

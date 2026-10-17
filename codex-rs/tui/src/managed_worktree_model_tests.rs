@@ -195,6 +195,7 @@ pub(super) async fn exercise(
     let after = server
         .thread_read(started.session.thread_id, /*include_turns*/ false)
         .await?;
+    assert_eq!(after.status_line_worktree, None);
     // These assert retained roots, not filesystem permission enforcement.
     assert_eq!(
         (before.cwd, before.environments),

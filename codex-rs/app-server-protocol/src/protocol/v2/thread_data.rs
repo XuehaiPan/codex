@@ -286,6 +286,9 @@ pub struct Thread {
     /// Saved Daybreak choice, independent of turn execution. Null if unset.
     #[experimental("thread.daybreakEnabled")]
     pub daybreak_enabled: Option<bool>,
+    /// Saved status-surface checkout. Does not change thread cwd or execution permissions.
+    #[serde(default)]
+    pub status_line_worktree: Option<codex_protocol::StatusLineWorktree>,
     /// Only populated on `thread/resume`, `thread/fork`, and `thread/read`
     /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
@@ -334,6 +337,8 @@ struct ThreadCompatibility {
     git_info: Option<GitInfo>,
     name: Option<String>,
     daybreak_enabled: Option<bool>,
+    #[serde(default)]
+    status_line_worktree: Option<codex_protocol::StatusLineWorktree>,
     turns: Vec<Turn>,
 }
 
@@ -375,6 +380,7 @@ impl<'de> Deserialize<'de> for Thread {
             git_info: thread.git_info,
             name: thread.name,
             daybreak_enabled: thread.daybreak_enabled,
+            status_line_worktree: thread.status_line_worktree,
             turns: thread.turns,
         })
     }

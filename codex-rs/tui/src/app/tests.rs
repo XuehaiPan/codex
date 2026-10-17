@@ -97,6 +97,8 @@ mod startup;
 mod startup_frame_tests;
 #[path = "tests/startup_warnings_tests.rs"]
 mod startup_warnings_tests;
+#[path = "tests/status_worktree_tests.rs"]
+mod status_worktree_tests;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
 #[path = "tests/streaming_interleave_e2e.rs"]
@@ -4877,6 +4879,16 @@ async fn inactive_thread_approval_badge_clears_after_turn_completion_notificatio
 
 #[tokio::test]
 async fn inactive_thread_started_notification_initializes_replay_session() -> Result<()> {
+    check_inferred_thread_reporting_context(false).await
+}
+
+#[tokio::test]
+async fn inactive_thread_started_notification_initializes_replay_session_with_selection()
+-> Result<()> {
+    check_inferred_thread_reporting_context(true).await
+}
+
+async fn check_inferred_thread_reporting_context(child_has_selection: bool) -> Result<()> {
     let mut app = make_test_app().await;
     let temp_dir = tempdir()?;
     let main_thread_id =
@@ -4886,6 +4898,15 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     let primary_cwd = test_path_buf("/tmp/main").abs();
     let shared_root = test_path_buf("/tmp/shared").abs();
     let primary_session = ThreadSessionState {
+        status_line_worktree: Some(codex_protocol::StatusLineWorktree {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            root: codex_utils_path_uri::LegacyAppPathString::from_path(&test_path_buf(
+                "/tmp/main-worktree",
+            )),
+            git_common_dir: codex_utils_path_uri::LegacyAppPathString::from_path(&test_path_buf(
+                "/tmp/main/.git",
+            )),
+        }),
         daybreak_enabled: false,
         windows_sandbox_host: WindowsSandboxHost::Local,
         approval_policy: AskForApproval::OnRequest,
@@ -4906,6 +4927,15 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
         ),
     );
 
+    let child_selection = child_has_selection.then(|| codex_protocol::StatusLineWorktree {
+        environment_id: "remote".into(),
+        root: codex_utils_path_uri::LegacyAppPathString::from_path(&test_path_buf(
+            "/tmp/agent-worktree",
+        )),
+        git_common_dir: codex_utils_path_uri::LegacyAppPathString::from_path(&test_path_buf(
+            "/tmp/agent/.git",
+        )),
+    });
     let rollout_path = temp_dir.path().join("agent-rollout.jsonl");
     app.enqueue_thread_notification(
         agent_thread_id,
@@ -4928,6 +4958,7 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
                 section_entered_at: None,
                 project_id: None,
                 daybreak_enabled: Some(true),
+                status_line_worktree: child_selection.clone(),
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 model: Some("gpt-agent".to_string()),
@@ -4963,6 +4994,8 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     drop(store);
 
     assert_eq!(session.thread_id, agent_thread_id);
+    assert_eq!(session.status_line_worktree, child_selection);
+    assert_eq!(session.status_line_environment_id, "remote");
     assert!(session.daybreak_enabled);
     assert_eq!(session.windows_sandbox_host, WindowsSandboxHost::Remote);
     assert_eq!(session.thread_name, Some("agent thread".to_string()));
@@ -5034,6 +5067,7 @@ async fn inactive_thread_started_notification_preserves_primary_model_when_path_
                 section_entered_at: None,
                 project_id: None,
                 daybreak_enabled: None,
+                status_line_worktree: None,
                 history_mode: Default::default(),
                 model_provider: "agent-provider".to_string(),
                 model: None,
@@ -5105,6 +5139,7 @@ async fn thread_read_session_state_does_not_reuse_primary_permission_profile() {
         section_entered_at: None,
         project_id: None,
         daybreak_enabled: None,
+        status_line_worktree: None,
         history_mode: Default::default(),
         model_provider: "read-provider".to_string(),
         model: Some("server-reported-model".to_string()),
@@ -6219,6 +6254,8 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
     };
     let make_header = |is_first| -> Arc<dyn HistoryCell> {
         let session = ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -6843,6 +6880,8 @@ async fn replace_goal_confirmation_snapshot() {
 
 pub(super) fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
     ThreadSessionState {
+        status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+        status_line_worktree: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -7944,6 +7983,8 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
 
     let make_header = |is_first| {
         let session = ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: ThreadId::new(),
@@ -8017,6 +8058,8 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
     let base_id = ThreadId::new();
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id: base_id,
@@ -9335,6 +9378,8 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
 
         let thread_id = ThreadId::new();
         let event = crate::session_state::ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
@@ -10097,6 +10142,8 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
     let thread_id = ThreadId::new();
     app.chat_widget
         .handle_thread_session(crate::session_state::ThreadSessionState {
+            status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            status_line_worktree: None,
             daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,

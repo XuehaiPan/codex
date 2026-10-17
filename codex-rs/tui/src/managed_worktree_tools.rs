@@ -286,7 +286,7 @@ impl ManagedWorktreeTools {
                                 };
                                 Ok(
                                     json!({"type":if registration.is_ok() {"created"} else {"registrationFailed"}, "worktree":payload,
-                                "message":if registration.is_ok() {"Keep the task cwd. Use the returned workspaceRoot explicitly and request filesystem permissions if needed."} else {"Checkout retained; registration failed. Do not create a duplicate. Inspect the worktree browser to recover."}}),
+                                "message":if registration.is_ok() {"Use workspaceRoot for commands; call set_status_line_worktree when implementation starts there. Request filesystem permissions if needed."} else {"Checkout retained; registration failed. Do not duplicate it. A valid workspaceRoot can be selected with set_status_line_worktree."}}),
                                 )
                             }
                             Ok(Err(error)) => Err(error.to_string()),

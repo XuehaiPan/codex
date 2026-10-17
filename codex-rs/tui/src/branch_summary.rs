@@ -10,9 +10,16 @@
 //! rather than a user-visible error. The status line can then render whichever pieces are available
 //! without blocking the rest of the UI.
 
+#[path = "branch_summary_cache.rs"]
+mod cache;
+
+use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::path::Path;
+use std::time::Duration;
+
+use futures::StreamExt;
 
 use serde::Deserialize;
 
@@ -22,12 +29,16 @@ use crate::workspace_command::WorkspaceCommandError;
 use crate::workspace_command::WorkspaceCommandExecutor;
 use crate::workspace_command::WorkspaceCommandOutput;
 
-/// Additions and deletions between `HEAD` and a branch comparison base.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Net text-line changes from the default-branch merge base to current checkout contents.
+///
+/// Includes staged, unstaged and non-ignored untracked files. Binary files and submodule pointers
+/// contribute no text lines, so a zero count does not imply a clean index or working tree.
+/// Renames count as removed and added contents, independent of Git's index-based rename detection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GitBranchDiffStats {
-    /// Total added lines in committed changes on the current branch.
+    /// Total added text lines in current contents.
     pub(crate) additions: u64,
-    /// Total deleted lines in committed changes on the current branch.
+    /// Total deleted text lines in current contents.
     pub(crate) deletions: u64,
 }
 
@@ -39,7 +50,7 @@ pub(crate) struct GitBranchDiffStats {
 pub(crate) struct StatusLineGitSummary {
     /// Open pull request associated with the current branch or HEAD commit.
     pub(crate) pull_request: Option<StatusLinePullRequest>,
-    /// Additions and deletions between `HEAD` and the repository default branch merge base.
+    /// Net current-content changes relative to the repository default-branch merge base.
     pub(crate) branch_change_stats: Option<GitBranchDiffStats>,
 }
 
@@ -111,41 +122,87 @@ pub(crate) async fn current_branch_name(
     Some(output.stdout.trim().to_string()).filter(|name| !name.is_empty())
 }
 
-/// Resolves PR and branch-change metadata for one status-line working directory.
-///
-/// The PR and diff-stat probes run concurrently because each is independent and both are optional.
-/// The returned summary is suitable for caching by `cwd`; callers should discard it if the active
-/// status-line cwd changes before the async lookup completes.
-pub(crate) async fn status_line_git_summary(
-    runner: &dyn WorkspaceCommandExecutor,
-    cwd: &Path,
-) -> StatusLineGitSummary {
-    let (pull_request, branch_change_stats) = tokio::join!(
-        open_pull_request(runner, cwd),
-        branch_diff_stats_to_default_branch(runner, cwd),
-    );
-    StatusLineGitSummary {
-        pull_request,
-        branch_change_stats,
-    }
+/// One checkout identity, sampled before and after a local snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GitCheckoutIdentity {
+    pub(crate) branch: Option<String>,
+    pub(crate) head: Option<String>,
 }
 
-/// Counts committed line changes between `HEAD` and the repository default branch.
+/// Local metadata publishes independently of the slower GitHub lookup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StatusLineLocalGit {
+    pub(crate) identity: GitCheckoutIdentity,
+    /// Absent when any content probe is incomplete; never publish a partial total.
+    pub(crate) branch_change_stats: Option<GitBranchDiffStats>,
+}
+
+pub(crate) const LOCAL_REFRESH_BUDGET: Duration = Duration::from_secs(5);
+const STATUS_OUTPUT_BYTES_CAP: usize = 1_048_576;
+
+/// Samples branch, HEAD and optional current contents within one total five-second budget.
 ///
-/// The comparison base is the merge base with a verified default-branch ref. Uncommitted working
-/// tree edits are intentionally ignored because the status-line item summarizes the checked-out
-/// branch, not the current dirty worktree.
+/// External commits/checkouts invalidate an inconsistent snapshot. Working-tree edits themselves
+/// are not transactional; the next refresh observes edits made while Git was reading files.
+pub(crate) async fn local_git_snapshot(
+    runner: &dyn WorkspaceCommandExecutor,
+    cwd: &Path,
+    include_changes: bool,
+) -> Option<StatusLineLocalGit> {
+    tokio::time::timeout(LOCAL_REFRESH_BUDGET, async {
+        let identity = checkout_identity(runner, cwd).await?;
+        let branch_change_stats = if include_changes && identity.head.is_some() {
+            branch_diff_stats_to_default_branch(runner, cwd).await
+        } else {
+            None
+        };
+        (checkout_identity(runner, cwd).await? == identity).then_some(StatusLineLocalGit {
+            identity,
+            branch_change_stats,
+        })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+pub(crate) async fn checkout_identity(
+    runner: &dyn WorkspaceCommandExecutor,
+    cwd: &Path,
+) -> Option<GitCheckoutIdentity> {
+    let branch = run_git_command(runner, cwd, &["branch", "--show-current"])
+        .await
+        .ok()?;
+    if !branch.success() {
+        return None;
+    }
+    let head = current_head_sha(runner, cwd).await;
+    Some(GitCheckoutIdentity {
+        branch: Some(branch.stdout.trim().to_owned()).filter(|branch| !branch.is_empty()),
+        head,
+    })
+}
+
+/// Counts the net difference from the merge base, without summing overlapping index/diff layers.
 async fn branch_diff_stats_to_default_branch(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
 ) -> Option<GitBranchDiffStats> {
-    let git_dir = run_git_command(runner, cwd, &["rev-parse", "--git-dir"])
+    // `ls-files` is cwd-relative whereas `diff` is repository-wide. Resolve on the workspace
+    // host so sessions started in a subdirectory still include sibling edits and conflicts.
+    let root = run_git_command(runner, cwd, &["rev-parse", "--show-toplevel"])
         .await
         .ok()?;
-    if !git_dir.success() {
+    if !root.success() || root.stdout.trim_end_matches(['\r', '\n']).is_empty() {
         return None;
     }
-
+    let cwd = Path::new(root.stdout.trim_end_matches(['\r', '\n']));
+    let conflicts = run_git_command(runner, cwd, &["ls-files", "-u", "-z"])
+        .await
+        .ok()?;
+    if !conflicts.success() || !conflicts.stdout.is_empty() {
+        return None;
+    }
     let default_branch = get_default_branch(runner, cwd).await?;
     let merge_base = run_git_command(
         runner,
@@ -154,40 +211,152 @@ async fn branch_diff_stats_to_default_branch(
     )
     .await
     .ok()?;
-    if !merge_base.success() {
+    if !merge_base.success() || merge_base.stdout.trim().is_empty() {
         return None;
     }
+    // Ignore gitlink changes: their numstat entries describe pointers, not text-file contents.
+    let tracked = run_git_command(
+        runner,
+        cwd,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--ignore-submodules=all",
+            "--no-renames",
+            "--numstat",
+            "-z",
+            merge_base.stdout.trim(),
+            "--",
+        ],
+    )
+    .await
+    .ok()?;
+    if !tracked.success() {
+        return None;
+    }
+    let ParsedNumstat {
+        mut total,
+        paths: tracked_paths,
+    } = parse_numstat(&tracked.stdout)?;
+    let untracked = run_git_command(
+        runner,
+        cwd,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    .await
+    .ok()?;
+    if !untracked.success() {
+        return None;
+    }
+    let paths = nul_records(&untracked.stdout)?
+        .into_iter()
+        .map(str::to_owned);
     let merge_base = merge_base.stdout.trim();
-    if merge_base.is_empty() {
-        return None;
+    let mut probes = futures::stream::iter(paths.map(|path| {
+        let previous = tracked_paths.get(path.as_str()).cloned();
+        async move {
+            // A staged deletion can have a new untracked file at the same path. Replace its
+            // deletion count with a blob-to-file diff so staging alone cannot change the total.
+            let blob = format!("{merge_base}:{path}");
+            // Git recognizes `/dev/null` itself, including Git for Windows. Prefix a relative
+            // path so a file named `-` cannot be interpreted as stdin by no-index diff.
+            let path = format!("./{path}");
+            let args = if previous.is_some() {
+                vec![
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-renames",
+                    "--numstat",
+                    "-z",
+                    &blob,
+                    "--",
+                    &path,
+                ]
+            } else {
+                vec![
+                    "diff",
+                    "--no-index",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--numstat",
+                    "-z",
+                    "--",
+                    "/dev/null",
+                    &path,
+                ]
+            };
+            let output = run_git_command(runner, cwd, &args).await.ok()?;
+            if !matches!(output.exit_code, 0 | 1) {
+                return None;
+            }
+            Some((previous, parse_numstat(&output.stdout)?.total))
+        }
+    }))
+    .buffer_unordered(4);
+    while let Some(result) = probes.next().await {
+        let (previous, stats) = result?;
+        if let Some(previous) = previous {
+            total.additions = total.additions.checked_sub(previous.additions)?;
+            total.deletions = total.deletions.checked_sub(previous.deletions)?;
+        }
+        total.additions = total.additions.checked_add(stats.additions)?;
+        total.deletions = total.deletions.checked_add(stats.deletions)?;
     }
+    Some(total)
+}
 
-    let range = format!("{merge_base}..HEAD");
-    let numstat = run_git_command(runner, cwd, &["diff", "--numstat", &range])
-        .await
-        .ok()?;
-    if !numstat.success() {
-        return None;
+fn nul_records(stdout: &str) -> Option<Vec<&str>> {
+    if stdout.is_empty() {
+        return Some(Vec::new());
     }
+    let records: Vec<_> = stdout.strip_suffix('\0')?.split('\0').collect();
+    records
+        .iter()
+        .all(|record| !record.is_empty())
+        .then_some(records)
+}
 
-    let mut additions = 0_u64;
-    let mut deletions = 0_u64;
-    for line in numstat.stdout.lines() {
-        let mut columns = line.split('\t');
-        additions += columns
-            .next()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
-        deletions += columns
-            .next()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0);
+#[derive(Default)]
+struct ParsedNumstat<'a> {
+    total: GitBranchDiffStats,
+    paths: HashMap<&'a str, GitBranchDiffStats>,
+}
+
+/// Parses NUL-delimited numstat, including the extra old/new path fields for renames.
+/// Tab/newline characters inside a path must never be mistaken for record separators.
+fn parse_numstat(stdout: &str) -> Option<ParsedNumstat<'_>> {
+    let mut parsed = ParsedNumstat::default();
+    if stdout.is_empty() {
+        return Some(parsed);
     }
-
-    Some(GitBranchDiffStats {
-        additions,
-        deletions,
-    })
+    let mut records = stdout.strip_suffix('\0')?.split('\0');
+    while let Some(record) = records.next() {
+        let mut columns = record.splitn(3, '\t');
+        let additions = columns.next()?;
+        let deletions = columns.next()?;
+        let mut path = columns.next()?;
+        if path.is_empty() {
+            let old = records.next()?;
+            path = records.next()?;
+            if old.is_empty() || path.is_empty() {
+                return None;
+            }
+        }
+        let stats = if additions == "-" && deletions == "-" {
+            GitBranchDiffStats::default()
+        } else {
+            GitBranchDiffStats {
+                additions: additions.parse().ok()?,
+                deletions: deletions.parse().ok()?,
+            }
+        };
+        parsed.total.additions = parsed.total.additions.checked_add(stats.additions)?;
+        parsed.total.deletions = parsed.total.deletions.checked_add(stats.deletions)?;
+        parsed.paths.insert(path, stats);
+    }
+    Some(parsed)
 }
 
 /// Returns git remotes in the order used for default-branch discovery.
@@ -275,28 +444,72 @@ async fn get_remote_default_branch_from_remote_show(
     cwd: &Path,
     remote: &str,
 ) -> Option<DefaultBranch> {
-    let output = run_git_command(runner, cwd, &["remote", "show", remote])
+    let key = if let Some(connection) = runner.cache_namespace() {
+        let common = run_git_command(
+            runner,
+            cwd,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
         .await
         .ok()?;
-    if !output.success() {
-        return None;
-    }
-
-    for line in output.stdout.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix("HEAD branch:") else {
-            continue;
-        };
-        let name = rest.trim();
-        let remote_ref = format!("refs/remotes/{remote}/{name}");
-        if !name.is_empty() && git_ref_exists(runner, cwd, &remote_ref).await {
-            return Some(DefaultBranch {
-                merge_ref: remote_ref,
-            });
+        let url = run_git_command(runner, cwd, &["remote", "get-url", remote])
+            .await
+            .ok()?;
+        if !common.success() || !url.success() {
+            return None;
         }
-    }
-
-    None
+        Some(cache::RemoteDefaultKey {
+            connection,
+            common_dir: common.stdout.trim_end_matches(['\r', '\n']).to_owned(),
+            remote: remote.to_owned(),
+            url: url.stdout.trim_end_matches(['\r', '\n']).to_owned(),
+        })
+    } else {
+        None
+    };
+    let cached = key.as_ref().and_then(|key| {
+        cache::REMOTE_DEFAULTS
+            .lock()
+            .ok()?
+            .get(key, tokio::time::Instant::now())
+    });
+    let branch = if let Some(cached) = cached {
+        cached
+    } else {
+        // Reserve a negative entry before awaiting: the total local-refresh timeout may cancel
+        // discovery, and must not cause another network attempt on every five-second refresh.
+        if let Some(key) = key.as_ref()
+            && let Ok(mut cache) = cache::REMOTE_DEFAULTS.lock()
+        {
+            cache.insert(key.clone(), None, tokio::time::Instant::now());
+        }
+        let output = run_git_command(runner, cwd, &["remote", "show", remote]).await;
+        let branch = output
+            .ok()
+            .filter(WorkspaceCommandOutput::success)
+            .and_then(|output| {
+                output.stdout.lines().find_map(|line| {
+                    line.trim()
+                        .strip_prefix("HEAD branch:")
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                })
+            });
+        if let Some(key) = key
+            && let Ok(mut cache) = cache::REMOTE_DEFAULTS.lock()
+        {
+            cache.insert(key, branch.clone(), tokio::time::Instant::now());
+        }
+        branch
+    }?;
+    // Cache only discovery. Ref existence is checked on each use, without fetching objects.
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
+    git_ref_exists(runner, cwd, &remote_ref)
+        .await
+        .then_some(DefaultBranch {
+            merge_ref: remote_ref,
+        })
 }
 
 /// Falls back to local `main` or `master` when no remote default branch can be found.
@@ -336,7 +549,7 @@ async fn git_ref_exists(
 /// Branch-based lookup is attempted first because it is cheap and mirrors `gh pr view`. Commit-based
 /// lookup is used as a fallback so fork workflows can still find a PR opened against the upstream
 /// repository even when `gh` infers the fork from the current checkout.
-async fn open_pull_request(
+pub(crate) async fn open_pull_request(
     runner: &dyn WorkspaceCommandExecutor,
     cwd: &Path,
 ) -> Option<StatusLinePullRequest> {
@@ -479,9 +692,27 @@ async fn run_git_command(
     argv.push("-c".to_string());
     argv.push(codex_git_utils::SAFE_BARE_REPOSITORY_CONFIG.to_string());
     argv.extend(args.iter().map(|arg| (*arg).to_string()));
-    runner
-        .run(WorkspaceCommand::new(argv, cwd.to_path_buf()).env("GIT_OPTIONAL_LOCKS", "0"))
-        .await
+    let mut command = WorkspaceCommand::new(argv, cwd.to_path_buf())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C");
+    command.output_bytes_cap = Some(STATUS_OUTPUT_BYTES_CAP);
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+    ] {
+        command.env.insert(variable.to_owned(), None);
+    }
+    let output = runner.run(command).await?;
+    // Buffered command responses have no truncation flag. Even exactly-at-cap output is ambiguous.
+    if output.stdout.len() >= STATUS_OUTPUT_BYTES_CAP {
+        return Err(crate::workspace_command::WorkspaceCommandError::new(
+            "Git status output reached its byte limit",
+        ));
+    }
+    Ok(output)
 }
 
 /// Runs a GitHub CLI command through the workspace-command abstraction.
@@ -515,13 +746,35 @@ mod tests {
     use std::sync::Mutex;
 
     #[tokio::test]
+    async fn branch_changes_disabled_samples_only_checkout_identity() {
+        let runner = FakeRunner::new(
+            (0..2)
+                .flat_map(|_| {
+                    [
+                        response(&["git", "branch", "--show-current"], 0, "feature\n"),
+                        response(&["git", "rev-parse", "HEAD"], 0, "head-sha\n"),
+                    ]
+                })
+                .collect(),
+        );
+        assert_eq!(
+            local_git_snapshot(&runner, Path::new("/repo"), false).await,
+            Some(StatusLineLocalGit {
+                identity: GitCheckoutIdentity {
+                    branch: Some("feature".into()),
+                    head: Some("head-sha".into()),
+                },
+                branch_change_stats: None,
+            })
+        );
+        assert!(runner.responses.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn branch_diff_stats_prefers_remote_default_ref_over_stale_local_branch() {
         let runner = FakeRunner::new(vec![
-            response(
-                &["git", "rev-parse", "--git-dir"],
-                /*exit_code*/ 0,
-                ".git\n",
-            ),
+            response(&["git", "rev-parse", "--show-toplevel"], 0, "/repo\n"),
+            response(&["git", "ls-files", "-u", "-z"], /*exit_code*/ 0, ""),
             response(&["git", "remote"], /*exit_code*/ 0, "origin\n"),
             response(
                 &["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
@@ -545,9 +798,25 @@ mod tests {
                 "base-sha\n",
             ),
             response(
-                &["git", "diff", "--numstat", "base-sha..HEAD"],
+                &[
+                    "git",
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--ignore-submodules=all",
+                    "--no-renames",
+                    "--numstat",
+                    "-z",
+                    "base-sha",
+                    "--",
+                ],
                 /*exit_code*/ 0,
-                "1\t0\tfile\n",
+                "1\t0\tfile\0",
+            ),
+            response(
+                &["git", "ls-files", "--others", "--exclude-standard", "-z"],
+                0,
+                "",
             ),
         ]);
 
@@ -668,6 +937,73 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn branch_changes_remote_discovery_uses_cache_but_rechecks_local_ref() {
+        let mut responses = Vec::new();
+        for _ in 0..3 {
+            responses.extend([
+                response(
+                    &[
+                        "git",
+                        "rev-parse",
+                        "--path-format=absolute",
+                        "--git-common-dir",
+                    ],
+                    0,
+                    "/repo/.git\n",
+                ),
+                response(
+                    &["git", "remote", "get-url", "origin"],
+                    0,
+                    "https://example.invalid/repo\n",
+                ),
+                response(
+                    &[
+                        "git",
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        "refs/remotes/origin/main",
+                    ],
+                    0,
+                    "abc\n",
+                ),
+            ]);
+        }
+        for _ in 0..2 {
+            responses.push(response(
+                &["git", "remote", "show", "origin"],
+                0,
+                "  HEAD branch: main\n",
+            ));
+        }
+        let mut runner = FakeRunner::new(responses);
+        runner.cache_namespace = Some(uuid::Uuid::new_v4());
+        for elapsed in [
+            Duration::ZERO,
+            cache::REMOTE_DEFAULT_TTL - Duration::from_nanos(1),
+            Duration::from_nanos(1),
+        ] {
+            tokio::time::advance(elapsed).await;
+            assert_eq!(
+                get_remote_default_branch_from_remote_show(&runner, Path::new("/repo"), "origin")
+                    .await,
+                Some(DefaultBranch {
+                    merge_ref: "refs/remotes/origin/main".into()
+                })
+            );
+        }
+        assert!(runner.responses.lock().unwrap().is_empty());
+        assert!(
+            !runner
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|argv| argv.iter().any(|arg| arg == "fetch"))
+        );
+    }
+
     fn response(argv: &[&str], exit_code: i32, stdout: &str) -> FakeResponse {
         let mut argv: Vec<String> = argv.iter().map(|arg| (*arg).to_string()).collect();
         if argv.first().map(String::as_str) == Some("git") {
@@ -695,6 +1031,7 @@ mod tests {
     }
 
     struct FakeRunner {
+        cache_namespace: Option<uuid::Uuid>,
         responses: Mutex<VecDeque<FakeResponse>>,
         seen: Mutex<Vec<Vec<String>>>,
     }
@@ -702,6 +1039,7 @@ mod tests {
     impl FakeRunner {
         fn new(responses: Vec<FakeResponse>) -> Self {
             Self {
+                cache_namespace: None,
                 responses: Mutex::new(responses.into()),
                 seen: Mutex::new(Vec::new()),
             }
@@ -727,6 +1065,10 @@ mod tests {
     }
 
     impl WorkspaceCommandExecutor for FakeRunner {
+        fn cache_namespace(&self) -> Option<uuid::Uuid> {
+            self.cache_namespace
+        }
+
         fn run(
             &self,
             command: WorkspaceCommand,
@@ -753,3 +1095,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "branch_summary_tests.rs"]
+mod content_tests;

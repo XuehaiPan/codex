@@ -266,10 +266,13 @@ impl App {
                 }
             }
             AppEvent::ManagedWorktreeRemoved { root, result } => match result {
-                Ok(()) => self.chat_widget.add_info_message(
-                    format!("Removed worktree at {}. Thread history was kept.", root.display()),
-                    /*hint*/ None,
-                ),
+                Ok(()) => {
+                    self.chat_widget.status_worktree_removed(&root);
+                    self.chat_widget.add_info_message(
+                        format!("Removed worktree at {}. Thread history was kept.", root.display()),
+                        /*hint*/ None,
+                    );
+                }
                 Err(error) => self.chat_widget.add_error_message(format!(
                     "Could not remove worktree at {}: {error}",
                     root.display()
@@ -365,6 +368,38 @@ impl App {
                     }
                     Err(error) => {
                         tracing::warn!(?request_id, %error, "failed to serialize dynamic tool response");
+                    }
+                }
+            }
+            AppEvent::StatusWorktreeCandidate { thread_id, view_id, cwd } => {
+                if self.chat_widget.accepts_status_worktree_candidate(thread_id, view_id) {
+                    app_server.status_worktree_tools().observe_candidate(
+                        app_server.request_handle(), thread_id, cwd.to_string_lossy().into_owned(),
+                        self.app_event_tx.clone(),
+                    );
+                }
+            }
+            AppEvent::StatusWorktreeSelected { token, selection, persisted } => {
+                if app_server.status_worktree_tools().accepts_selection(&token)
+                    && self.chat_widget.thread_id() == Some(token.thread_id) {
+                    self.chat_widget.select_status_worktree(selection.clone());
+                    if !persisted {
+                        tracing::debug!("status worktree selection is connection-local");
+                    }
+                }
+                // Keep cached sessions consistent so switching away and back cannot restore
+                // an older selection. Durable metadata remains authoritative after reconnect.
+                if app_server.status_worktree_tools().accepts_selection(&token) {
+                    if let Some(session) = self.primary_session_configured.as_mut()
+                        && session.thread_id == token.thread_id {
+                        session.status_line_worktree = Some(selection.clone());
+                    }
+                    if let Some(channel) = self.thread_event_channels.get(&token.thread_id) {
+                        let mut store = channel.store.lock().await;
+                        if app_server.status_worktree_tools().accepts_selection(&token)
+                            && let Some(session) = store.session.as_mut() {
+                            session.status_line_worktree = Some(selection);
+                        }
                     }
                 }
             }
@@ -3377,12 +3412,12 @@ impl App {
                     }
                 }
             }
-            AppEvent::StatusLineBranchUpdated { cwd, branch } => {
-                self.chat_widget.set_status_line_branch(cwd, branch);
+            AppEvent::StatusLineLocalUpdated { token, validation, cwd, snapshot } => {
+                self.chat_widget.apply_status_local_result(token, validation, cwd, snapshot);
                 self.refresh_status_line();
             }
-            AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
-                self.chat_widget.set_status_line_git_summary(cwd, summary);
+            AppEvent::StatusLinePullRequestUpdated { token, identity, pull_request } => {
+                self.chat_widget.apply_status_pr_result(token, identity, pull_request);
                 self.refresh_status_line();
             }
             AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result } => {

@@ -291,6 +291,7 @@ pub(crate) fn summary_to_thread(
         git_info,
         name: None,
         daybreak_enabled: None,
+        status_line_worktree: None,
         turns: Vec::new(),
     }
 }

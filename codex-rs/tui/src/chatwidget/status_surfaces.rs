@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
-use crate::branch_summary;
 use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
@@ -50,22 +49,22 @@ const TERMINAL_TITLE_ACTION_REQUIRED_PREFIX_HIDDEN: &str = "[ . ] Action Require
 /// (notably git branch lookup and invalid-item warnings). This snapshot lets one
 /// refresh pass compute those shared concerns once, then render both surfaces
 /// from the same selection set.
-struct StatusSurfaceSelections {
-    status_line_items: Vec<StatusLineItem>,
+pub(super) struct StatusSurfaceSelections {
+    pub(super) status_line_items: Vec<StatusLineItem>,
     invalid_status_line_items: Vec<String>,
-    terminal_title_items: Vec<TerminalTitleItem>,
+    pub(super) terminal_title_items: Vec<TerminalTitleItem>,
     invalid_terminal_title_items: Vec<String>,
 }
 
 impl StatusSurfaceSelections {
-    fn uses_git_branch(&self) -> bool {
+    pub(super) fn uses_git_branch(&self) -> bool {
         self.status_line_items.contains(&StatusLineItem::GitBranch)
             || self
                 .terminal_title_items
                 .contains(&TerminalTitleItem::GitBranch)
     }
 
-    fn uses_git_summary(&self) -> bool {
+    pub(super) fn uses_git_summary(&self) -> bool {
         self.status_line_items
             .contains(&StatusLineItem::PullRequestNumber)
             || self
@@ -105,7 +104,7 @@ pub(super) struct CachedProjectRootName {
 }
 
 impl ChatWidget {
-    fn status_surface_selections(&self) -> StatusSurfaceSelections {
+    pub(super) fn status_surface_selections(&self) -> StatusSurfaceSelections {
         let (status_line_items, invalid_status_line_items) = self.status_line_items_with_invalids();
         let (terminal_title_items, invalid_terminal_title_items) =
             self.terminal_title_items_with_invalids();
@@ -160,29 +159,7 @@ impl ChatWidget {
     }
 
     fn sync_status_surface_shared_state(&mut self, selections: &StatusSurfaceSelections) {
-        if !selections.uses_git_branch() {
-            self.status_line_branch = None;
-            self.status_line_branch_pending = false;
-            self.status_line_branch_lookup_complete = false;
-        } else {
-            let cwd = self.status_line_cwd().to_path_buf();
-            self.sync_status_line_branch_state(&cwd);
-            if !self.status_line_branch_lookup_complete {
-                self.request_status_line_branch(cwd);
-            }
-        }
-
-        if !selections.uses_git_summary() {
-            self.status_line_git_summary = None;
-            self.status_line_git_summary_pending = false;
-            self.status_line_git_summary_lookup_complete = false;
-        } else {
-            let cwd = self.status_line_cwd().to_path_buf();
-            self.sync_status_line_git_summary_state(&cwd);
-            if !self.status_line_git_summary_lookup_complete {
-                self.request_status_line_git_summary(cwd);
-            }
-        }
+        self.sync_status_refresh(selections);
 
         if !selections.uses_workspace_headline() {
             self.status_line_workspace_headline = None;
@@ -467,26 +444,6 @@ impl ChatWidget {
             .then_some(TERMINAL_TITLE_SPINNER_INTERVAL)
     }
 
-    pub(super) fn request_status_line_branch_refresh(&mut self) {
-        let selections = self.status_surface_selections();
-        if !selections.uses_git_branch() {
-            return;
-        }
-        let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_branch_state(&cwd);
-        self.request_status_line_branch(cwd);
-    }
-
-    pub(super) fn request_status_line_git_summary_refresh(&mut self) {
-        let selections = self.status_surface_selections();
-        if !selections.uses_git_summary() {
-            return;
-        }
-        let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_git_summary_state(&cwd);
-        self.request_status_line_git_summary(cwd);
-    }
-
     /// Parses configured status-line ids into known items and collects unknown ids.
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
@@ -529,9 +486,7 @@ impl ChatWidget {
     }
 
     fn status_line_cwd(&self) -> &Path {
-        self.current_cwd
-            .as_deref()
-            .unwrap_or(self.config.cwd.as_path())
+        self.status_context_cwd()
     }
 
     /// Resolves the project root associated with `cwd`.
@@ -540,6 +495,12 @@ impl ChatWidget {
     /// nearest project config layer so non-git projects can still surface a
     /// stable project label.
     fn status_line_project_root_for_cwd(&self, cwd: &Path) -> Option<PathBuf> {
+        if self.status_worktree.saved.is_some() && !self.status_worktree.fallback {
+            return Some(cwd.to_path_buf());
+        }
+        if self.remote_connection.is_some() {
+            return Some(cwd.to_path_buf());
+        }
         if let Some(repo_root) = get_git_repo_root(cwd) {
             return Some(repo_root);
         }
@@ -596,70 +557,6 @@ impl ChatWidget {
         Some(Self::truncate_terminal_title_part(
             project, /*max_chars*/ 24,
         ))
-    }
-
-    /// Resets git-branch cache state when the status-line cwd changes.
-    ///
-    /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
-    /// Keeping stale branch values across cwd changes would surface incorrect repository context.
-    fn sync_status_line_branch_state(&mut self, cwd: &Path) {
-        if self
-            .status_line_branch_cwd
-            .as_ref()
-            .is_some_and(|path| path == cwd)
-        {
-            return;
-        }
-        self.status_line_branch_cwd = Some(cwd.to_path_buf());
-        self.status_line_branch = None;
-        self.status_line_branch_pending = false;
-        self.status_line_branch_lookup_complete = false;
-    }
-
-    fn sync_status_line_git_summary_state(&mut self, cwd: &Path) {
-        if self.status_line_git_summary_cwd.as_deref() == Some(cwd) {
-            return;
-        }
-        self.status_line_git_summary_cwd = Some(cwd.to_path_buf());
-        self.status_line_git_summary = None;
-        self.status_line_git_summary_pending = false;
-        self.status_line_git_summary_lookup_complete = false;
-    }
-
-    /// Starts an async git-branch lookup unless one is already running.
-    ///
-    /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
-    /// stale completions after directory changes.
-    fn request_status_line_branch(&mut self, cwd: PathBuf) {
-        if self.status_line_branch_pending {
-            return;
-        }
-        let Some(runner) = self.workspace_command_runner.clone() else {
-            self.status_line_branch_lookup_complete = true;
-            return;
-        };
-        self.status_line_branch_pending = true;
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let branch = branch_summary::current_branch_name(runner.as_ref(), &cwd).await;
-            tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
-        });
-    }
-
-    fn request_status_line_git_summary(&mut self, cwd: PathBuf) {
-        if self.status_line_git_summary_pending {
-            return;
-        }
-        let Some(runner) = self.workspace_command_runner.clone() else {
-            self.status_line_git_summary_lookup_complete = true;
-            return;
-        };
-        self.status_line_git_summary_pending = true;
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let summary = branch_summary::status_line_git_summary(runner.as_ref(), &cwd).await;
-            tx.send(AppEvent::StatusLineGitSummaryUpdated { cwd, summary });
-        });
     }
 
     fn request_status_line_workspace_headline_if_due(&mut self, now: Instant) {

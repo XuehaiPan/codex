@@ -1245,6 +1245,9 @@ impl App {
     ) -> Option<ThreadSessionState> {
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
+        // Reporting context belongs to the notified thread, even when execution settings are
+        // inferred from the primary session. An inherited selection also blocks first-use adoption.
+        session.update_status_line_context(&notification.thread);
         session.daybreak_enabled = notification.thread.daybreak_enabled.unwrap_or(false);
         session.windows_sandbox_host = crate::windows_sandbox::host_from_environments(
             notification.thread.environments.as_deref(),

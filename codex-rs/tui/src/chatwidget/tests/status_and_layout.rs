@@ -5,6 +5,9 @@ use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::chatwidget::realtime::tests::activate_voice_for_thread;
+use crate::status_line_refresh::StatusProbeKind;
+use crate::status_line_refresh::StatusProbeToken;
+use crate::status_line_refresh::StatusRefreshContext;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
@@ -358,25 +361,22 @@ async fn status_line_branch_changes_render_no_changes() {
 #[tokio::test]
 async fn stale_status_line_git_summary_update_is_ignored() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.status_line_git_summary_cwd = Some(PathBuf::from("/expected"));
-    chat.status_line_git_summary_pending = true;
-
-    chat.set_status_line_git_summary(
-        PathBuf::from("/other"),
-        StatusLineGitSummary {
-            pull_request: Some(crate::branch_summary::StatusLinePullRequest {
-                number: 20_252,
-                url: "https://github.com/openai/codex/pull/20252".to_string(),
-            }),
-            branch_change_stats: Some(crate::branch_summary::GitBranchDiffStats {
-                additions: 143,
-                deletions: 22,
-            }),
-        },
+    let pending = pending_status_pr(&mut chat);
+    let mut obsolete = pending.clone();
+    obsolete.cwd = PathBuf::from("/other");
+    chat.apply_status_pr_result(
+        obsolete,
+        None,
+        Some(crate::branch_summary::StatusLinePullRequest {
+            number: 20252,
+            url: "https://example.invalid/20252".into(),
+        }),
     );
-
     assert!(chat.status_line_git_summary.is_none());
-    assert!(!chat.status_line_git_summary_pending);
+    assert_eq!(
+        chat.status_refresh.pending(StatusProbeKind::PullRequest),
+        Some(&pending)
+    );
 }
 
 #[tokio::test]
@@ -3884,41 +3884,88 @@ async fn account_update_discards_stale_workspace_headline_results() {
 async fn status_line_branch_state_resets_when_git_branch_disabled() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("main".to_string());
-    chat.status_line_branch_pending = true;
-    chat.status_line_branch_lookup_complete = true;
+    prepare_status_refresh(&mut chat);
     chat.local_settings.tui.status_line = Some(vec!["model_name".to_string()]);
 
     chat.refresh_status_line();
 
     assert_eq!(chat.status_line_branch, None);
-    assert!(!chat.status_line_branch_pending);
-    assert!(!chat.status_line_branch_lookup_complete);
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_none()
+    );
 }
 
 #[tokio::test]
 async fn status_line_branch_refreshes_after_turn_complete() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    install_noop_workspace_command_runner(&mut chat);
-    chat.local_settings.tui.status_line = Some(vec!["git-branch".to_string()]);
-    chat.status_line_branch_lookup_complete = true;
-    chat.status_line_branch_pending = false;
-
-    handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
-
-    assert!(chat.status_line_branch_pending);
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    prepare_status_refresh(&mut chat);
+    settle_status_local(&mut chat, &mut rx).await;
+    handle_turn_completed(&mut chat, "turn-1", None);
+    tokio::time::advance(Duration::from_millis(249)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_none()
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_some()
+    );
 }
 
 #[tokio::test]
 async fn status_line_branch_refreshes_after_interrupt() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    install_noop_workspace_command_runner(&mut chat);
-    chat.local_settings.tui.status_line = Some(vec!["git-branch".to_string()]);
-    chat.status_line_branch_lookup_complete = true;
-    chat.status_line_branch_pending = false;
-
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    prepare_status_refresh(&mut chat);
+    settle_status_local(&mut chat, &mut rx).await;
     handle_turn_interrupted(&mut chat, "turn-1");
+    tokio::time::advance(Duration::from_millis(249)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_none()
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_some()
+    );
+}
 
-    assert!(chat.status_line_branch_pending);
+fn prepare_status_refresh(chat: &mut ChatWidget) {
+    install_noop_workspace_command_runner(chat);
+    chat.thread_id = Some(ThreadId::new());
+    chat.local_settings.tui.status_line = Some(vec!["git-branch".into()]);
+    chat.local_settings.tui.terminal_title = Some(vec![]);
+    tokio::time::pause();
+    chat.refresh_status_surfaces();
+}
+
+async fn settle_status_local(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    loop {
+        if let AppEvent::StatusLineLocalUpdated {
+            token,
+            validation,
+            cwd,
+            snapshot,
+        } = rx.recv().await.unwrap()
+        {
+            chat.apply_status_local_result(token, validation, cwd, snapshot);
+            break;
+        }
+    }
 }
 
 fn install_noop_workspace_command_runner(chat: &mut ChatWidget) {
@@ -4409,6 +4456,8 @@ async fn session_configured_clears_goal_status_footer() {
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+        status_line_worktree: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
@@ -5492,6 +5541,9 @@ async fn overlapping_hook_live_cell_tracks_parallel_quiet_hooks() {
 async fn running_hook_does_not_displace_active_exec_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
+    // Fixture construction can cross a spinner/elapsed-time boundary before any activity.
+    // Start this snapshot's clock at the command being exercised.
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let begin = begin_exec(&mut chat, "call-1", "echo done");
     let exec_running = active_blob(&chat);
 
@@ -5913,4 +5965,72 @@ async fn chatwidget_tall() {
         "chatwidget_tall",
         normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
+}
+
+#[tokio::test]
+async fn status_refresh_stale_response_preserves_newer_pending() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(None).await;
+    let pending = pending_status_pr(&mut chat);
+    let mut obsolete = pending.clone();
+    obsolete.request_id = 0;
+    chat.apply_status_pr_result(obsolete, None, None);
+    assert_eq!(
+        chat.status_refresh.pending(StatusProbeKind::PullRequest),
+        Some(&pending),
+        "a stale response must not clear a newer request"
+    );
+    assert!(chat.status_line_git_summary.is_none());
+}
+
+#[tokio::test]
+async fn status_refresh_external_changes_while_idle() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+    install_noop_workspace_command_runner(&mut chat);
+    chat.thread_id = Some(ThreadId::new());
+    chat.local_settings.tui.status_line = Some(vec!["git-branch".to_owned()]);
+    chat.local_settings.tui.terminal_title = Some(vec![]);
+    tokio::time::pause();
+    chat.refresh_status_surfaces();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_some()
+    );
+    settle_status_local(&mut chat, &mut rx).await;
+    tokio::time::advance(Duration::from_millis(4999)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_none()
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    chat.pre_draw_tick();
+    assert!(
+        chat.status_refresh
+            .pending(StatusProbeKind::LocalGit)
+            .is_some(),
+        "idle refresh must attempt Git at five seconds"
+    );
+}
+
+fn pending_status_pr(chat: &mut ChatWidget) -> StatusProbeToken {
+    chat.thread_id = Some(ThreadId::new());
+    let now = tokio::time::Instant::now();
+    chat.status_refresh.configure(
+        StatusRefreshContext {
+            thread_id: chat.thread_id.unwrap(),
+            environment_id: chat.status_worktree.environment_id.clone(),
+            generation: chat.status_worktree.generation,
+            cwd: chat.status_context_cwd().to_path_buf(),
+        },
+        false,
+        true,
+        now,
+    );
+    chat.status_refresh.due(now);
+    chat.status_refresh
+        .pending(StatusProbeKind::PullRequest)
+        .unwrap()
+        .clone()
 }

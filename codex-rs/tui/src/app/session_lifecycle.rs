@@ -731,6 +731,9 @@ impl App {
             self.config.clone(),
             /*initial_user_message*/ None,
         );
+        if let Some(previous) = self.chat_widget.thread_id() {
+            app_server.status_worktree_tools().cancel_pending(previous);
+        }
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.chat_widget
             .set_task_mentions_enabled(app_server.task_tools_available(thread_id));
@@ -750,7 +753,17 @@ impl App {
         self.pending_thread_switch_resets += 1;
         self.app_event_tx
             .send(AppEvent::ResetTranscriptForThreadSwitch);
+        self.chat_widget.set_status_worktree_live(false);
         self.replay_thread_snapshot(snapshot, resume_restored_queue);
+        if let Some(selection) = app_server
+            .status_worktree_tools()
+            .transient_selection(thread_id)
+        {
+            self.chat_widget.restore_status_worktree(Some(selection));
+        }
+        self.chat_widget
+            .set_status_worktree_live(resume_restored_queue && !external_writer);
+        self.chat_widget.refresh_status_line();
         if let Some(thread_id) = self.chat_widget.thread_id()
             && let Some(active) = self
                 .chat_widget

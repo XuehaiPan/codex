@@ -181,37 +181,6 @@ impl ChatWidget {
         self.refresh_terminal_title();
     }
 
-    /// Stores async git-branch lookup results for the current status-line cwd.
-    ///
-    /// Results are dropped when they target an out-of-date cwd to avoid rendering stale branch
-    /// names after directory changes.
-    pub(crate) fn set_status_line_branch(&mut self, cwd: PathBuf, branch: Option<String>) {
-        if self.status_line_branch_cwd.as_ref() != Some(&cwd) {
-            self.status_line_branch_pending = false;
-            return;
-        }
-        self.status_line_branch = branch;
-        self.status_line_branch_pending = false;
-        self.status_line_branch_lookup_complete = true;
-        self.refresh_status_surfaces();
-    }
-
-    /// Stores async Git summary lookup results for the current status-line cwd.
-    pub(crate) fn set_status_line_git_summary(
-        &mut self,
-        cwd: PathBuf,
-        summary: StatusLineGitSummary,
-    ) {
-        if self.status_line_git_summary_cwd.as_ref() != Some(&cwd) {
-            self.status_line_git_summary_pending = false;
-            return;
-        }
-        self.status_line_git_summary = Some(summary);
-        self.status_line_git_summary_pending = false;
-        self.status_line_git_summary_lookup_complete = true;
-        self.refresh_status_surfaces();
-    }
-
     pub(crate) fn add_status_output(
         &mut self,
         refreshing_rate_limits: bool,

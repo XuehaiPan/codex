@@ -218,6 +218,7 @@ SELECT
     threads.section_entered_at_ms,
     threads.project_id,
     threads.daybreak_enabled,
+    threads.status_line_worktree,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url
@@ -612,6 +613,7 @@ SELECT
     threads.section_entered_at_ms,
     threads.project_id,
     threads.daybreak_enabled,
+    threads.status_line_worktree,
     threads.git_sha,
     threads.git_branch,
     threads.git_origin_url

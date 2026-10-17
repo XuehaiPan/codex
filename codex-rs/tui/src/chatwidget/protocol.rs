@@ -556,6 +556,18 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if replay_kind.is_none()
+            && self
+                .thread_id
+                .is_some_and(|id| notification.thread_id == id.to_string())
+            && let ThreadItem::CommandExecution { cwd, source, .. } = &notification.item
+            && matches!(
+                source,
+                ExecCommandSource::Agent | ExecCommandSource::UnifiedExecStartup
+            )
+        {
+            self.observe_status_worktree_candidate(PathBuf::from(cwd.as_str()));
+        }
         self.restore_realtime_transcripts_before_turn(&notification.turn_id);
         match notification.item {
             ThreadItem::UserMessage { content, .. } if replay_kind.is_none() => {

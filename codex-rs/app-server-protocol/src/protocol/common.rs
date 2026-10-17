@@ -3271,6 +3271,7 @@ mod tests {
                     git_info: None,
                     name: None,
                     daybreak_enabled: None,
+                    status_line_worktree: None,
                     turns: Vec::new(),
                 },
                 model: "gpt-5".to_string(),
@@ -3333,6 +3334,7 @@ mod tests {
                         "gitInfo": null,
                         "name": null,
                         "daybreakEnabled": null,
+                        "statusLineWorktree": null,
                         "turns": []
                     },
                     "model": "gpt-5",

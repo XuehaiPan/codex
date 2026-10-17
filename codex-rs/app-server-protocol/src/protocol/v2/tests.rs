@@ -332,6 +332,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             git_info: None,
             name: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             turns: Vec::new(),
         },
         model: "gpt-5".to_string(),
@@ -5451,5 +5452,36 @@ fn tool_request_user_input_params_default_legacy_missing_is_blocking_to_true() {
             is_blocking: true,
             auto_resolution_ms: Some(60_000),
         }
+    );
+}
+
+#[test]
+fn status_worktree_metadata_patch_omitted_vs_null() {
+    let omitted: ThreadMetadataUpdateParams =
+        serde_json::from_value(json!({"threadId": "thread"})).unwrap();
+    assert_eq!(omitted.status_line_worktree, None);
+    assert!(
+        serde_json::to_value(&omitted)
+            .unwrap()
+            .get("statusLineWorktree")
+            .is_none()
+    );
+    let cleared: ThreadMetadataUpdateParams =
+        serde_json::from_value(json!({"threadId": "thread", "statusLineWorktree": null})).unwrap();
+    assert_eq!(cleared.status_line_worktree, Some(None));
+    assert_eq!(
+        serde_json::to_value(cleared)
+            .unwrap()
+            .get("statusLineWorktree"),
+        Some(&serde_json::Value::Null)
+    );
+    let selection = json!({"environmentId": "remote", "root": "C:\\worktree", "gitCommonDir": "C:\\repo\\.git"});
+    let set: ThreadMetadataUpdateParams =
+        serde_json::from_value(json!({"threadId": "thread", "statusLineWorktree": selection}))
+            .unwrap();
+    assert!(matches!(&set.status_line_worktree, Some(Some(_))));
+    assert_eq!(
+        serde_json::to_value(set).unwrap()["statusLineWorktree"],
+        selection
     );
 }

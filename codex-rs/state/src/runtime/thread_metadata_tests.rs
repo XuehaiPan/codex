@@ -46,3 +46,107 @@ async fn get_threads_preserves_valid_metadata_across_batches() -> anyhow::Result
     std::fs::remove_dir_all(home)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn status_worktree_metadata_survives_reconciliation() -> anyhow::Result<()> {
+    let home = unique_temp_dir();
+    std::fs::create_dir_all(&home)?;
+    let config = SqliteConfig::new_for_testing(home.as_path().abs());
+    let runtime = StateRuntime::init(config.clone(), "test-provider".to_string()).await?;
+    let id = ThreadId::new();
+    let metadata = test_thread_metadata(home.as_path(), id, home.as_path().join("session"));
+    runtime.upsert_thread(&metadata).await?;
+    let selection = codex_protocol::StatusLineWorktree {
+        environment_id: "remote-environment".to_string(),
+        root: serde_json::from_value(serde_json::json!("/remote/missing/worktree"))?,
+        git_common_dir: serde_json::from_value(serde_json::json!("/remote/repo/.git"))?,
+    };
+    assert!(
+        runtime
+            .set_thread_status_line_worktree(id, Some(&selection))
+            .await?
+    );
+    let mut stale = runtime.get_thread(id).await?.expect("saved metadata");
+    for expected in [Some(selection.clone()), None] {
+        assert!(
+            runtime
+                .set_thread_status_line_worktree(id, expected.as_ref())
+                .await?
+        );
+        stale.title = "unrelated update".to_string();
+        runtime.upsert_thread(&stale).await?;
+        let actual = runtime.get_thread(id).await?.expect("saved metadata");
+        assert_eq!(actual.status_line_worktree, expected);
+        assert_eq!(actual.cwd, metadata.cwd);
+        assert_eq!(actual.sandbox_policy, metadata.sandbox_policy);
+        assert_eq!(actual.approval_mode, metadata.approval_mode);
+        assert_eq!(actual.title, "unrelated update");
+        // A fork/new row cannot inherit reporting selection through an ordinary metadata upsert.
+        stale.id = ThreadId::new();
+        runtime.upsert_thread(&stale).await?;
+        assert_eq!(
+            runtime
+                .get_thread(stale.id)
+                .await?
+                .unwrap()
+                .status_line_worktree,
+            None
+        );
+        stale.id = id;
+    }
+    assert!(
+        !runtime
+            .set_thread_status_line_worktree(ThreadId::new(), Some(&selection))
+            .await?
+    );
+    assert!(
+        runtime
+            .set_thread_status_line_worktree(id, Some(&selection))
+            .await?
+    );
+    runtime.close().await;
+    let reopened = StateRuntime::init(config, "test-provider".to_string()).await?;
+    assert_eq!(
+        reopened.get_thread(id).await?.unwrap().status_line_worktree,
+        Some(selection)
+    );
+    reopened.close().await;
+    std::fs::remove_dir_all(home)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_worktree_metadata_migrates_populated_database() -> anyhow::Result<()> {
+    let home = unique_temp_dir();
+    std::fs::create_dir_all(&home)?;
+    let config = SqliteConfig::new_for_testing(home.as_path().abs());
+    let pool = config.open_read_write_pool(&config.state_db_path()).await?;
+    let migrator = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::migrations::STATE_MIGRATOR
+                .migrations
+                .iter()
+                .filter(|migration| migration.version <= 61)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+        table_name: crate::migrations::STATE_MIGRATOR.table_name.clone(),
+        create_schemas: crate::migrations::STATE_MIGRATOR.create_schemas.clone(),
+    };
+    migrator.run(&pool).await?;
+    let id = ThreadId::new();
+    sqlx::query("INSERT INTO threads (id, rollout_path, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode) VALUES (?, '/saved.jsonl', 1, 2, 'cli', 'test', '/session', 'keep me', 'read-only', 'on-request')")
+        .bind(id.to_string()).execute(&pool).await?;
+    pool.close().await;
+    let runtime = StateRuntime::init(config, "test".to_string()).await?;
+    let actual = runtime.get_thread(id).await?.expect("migrated thread");
+    assert_eq!(actual.status_line_worktree, None);
+    assert_eq!(actual.title, "keep me");
+    assert_eq!(actual.cwd, std::path::PathBuf::from("/session"));
+    runtime.close().await;
+    std::fs::remove_dir_all(home)?;
+    Ok(())
+}

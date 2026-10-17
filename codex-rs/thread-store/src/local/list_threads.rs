@@ -95,6 +95,19 @@ pub(super) async fn list_threads(
         }
     }
     if let Some(state_db) = state_db {
+        let ids = items
+            .iter()
+            .map(|thread| thread.thread_id)
+            .collect::<Vec<_>>();
+        let reporting_metadata = state_db.get_threads(&ids).await.unwrap_or_else(|error| {
+            tracing::warn!(%error, "failed to read reporting worktree metadata for thread list");
+            HashMap::new()
+        });
+        for thread in &mut items {
+            thread.status_line_worktree = reporting_metadata
+                .get(&thread.thread_id)
+                .and_then(|metadata| metadata.status_line_worktree.clone());
+        }
         let sectioned_thread_ids = items
             .iter()
             .filter(|thread| thread.section.is_some())

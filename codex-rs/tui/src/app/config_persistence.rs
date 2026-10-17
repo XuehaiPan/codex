@@ -1901,6 +1901,8 @@ enabled = false
 
         app.chat_widget
             .handle_thread_session(crate::session_state::ThreadSessionState {
+                status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+                status_line_worktree: None,
                 daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id: ThreadId::new(),

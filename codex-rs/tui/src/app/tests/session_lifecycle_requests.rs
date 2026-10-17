@@ -1235,13 +1235,14 @@ async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() ->
         assert_eq!(params["dynamicTools"][0]["name"], "codex_tui");
         assert_eq!(
             params["dynamicTools"][0]["tools"].as_array().map(Vec::len),
-            Some(6)
+            Some(7)
         );
         assert!(
             params["dynamicTools"][0]["tools"]
                 .as_array()
                 .is_some_and(|tools| tools.iter().all(|tool| {
-                    tool["deferLoading"] == true
+                    tool["deferLoading"].as_bool().unwrap_or(false)
+                        == (tool["name"] != "set_status_line_worktree")
                         && !crate::dynamic_tools::DELEGATION_TOOLS
                             .contains(&tool["name"].as_str().unwrap_or_default())
                 }))
@@ -1535,7 +1536,8 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths_sc
         .find(|server| server.name == "codex_tui")
         .expect("local daemon must connect to the TUI MCP server")
         .tools;
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
+    assert!(tools.contains_key("set_status_line_worktree"));
     for tool in crate::dynamic_tools::DELEGATION_TOOLS {
         assert!(tools.contains_key(tool));
     }
@@ -1869,7 +1871,7 @@ async fn local_mcp_respects_configured_servers_and_managed_requirements() -> Res
         } else {
             assert_eq!(
                 start["dynamicTools"][0]["tools"].as_array().map(Vec::len),
-                Some(6)
+                Some(7)
             );
             assert!(start["config"]["mcp_servers.codex_tui"].is_null());
         }
@@ -2242,6 +2244,7 @@ async fn check_dynamic_tool_requests(
                 thread_id: creation_source.to_string(),
                 project_id: Some(project.project.id.clone()),
                 daybreak_enabled: Some(false),
+                status_line_worktree: None,
                 git_info: None,
             },
         })
@@ -4008,6 +4011,10 @@ terminal_visualization_instructions = true
     app.primary_thread_id = Some(original);
     assert_eq!(app.chat_widget.thread_id(), Some(original));
     assert!(!app.pending_managed_worktree_creation);
+    assert_eq!(
+        app.chat_widget.status_context_cwd(),
+        app.config.cwd.as_path()
+    );
     let stale_error = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => {
@@ -5377,6 +5384,87 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         owner.shutdown().await?;
         server.shutdown().await?;
         proxy.await??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_worktree_failed_removal_preserves_selection() -> Result<()> {
+    let (mut app, _home) = make_history_test_app().await?;
+    let (mut server, _, proxy) = start_recording_app_server(&app.config, None, None).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let original = app.config.cwd.clone();
+    let selected = original.join("implementation");
+    app.chat_widget
+        .select_status_worktree(codex_protocol::StatusLineWorktree {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            root: selected.clone().into(),
+            git_common_dir: original.join(".git").into(),
+        });
+    for error in ["worktree is dirty", "operation cancelled"] {
+        app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::ManagedWorktreeRemoved {
+                root: selected.to_path_buf(),
+                result: Err(error.into()),
+            },
+        )
+        .await?;
+        assert_eq!(app.chat_widget.status_context_cwd(), selected.as_path());
+        assert_eq!(app.chat_widget.config_ref().cwd, original);
+    }
+    app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::ManagedWorktreeRemoved {
+            root: original.join("unrelated").to_path_buf(),
+            result: Ok(()),
+        },
+    )
+    .await?;
+    assert_eq!(app.chat_widget.status_context_cwd(), selected.as_path());
+    app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::ManagedWorktreeRemoved {
+            root: selected.to_path_buf(),
+            result: Ok(()),
+        },
+    )
+    .await?;
+    assert_eq!(app.chat_widget.status_context_cwd(), original.as_path());
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn status_worktree_creation_failure_and_cancellation_preserve_selection() -> Result<()> {
+    let (mut app, _home) = make_history_test_app().await?;
+    let original = app.config.cwd.clone();
+    let selected = original.join("implementation");
+    let thread = ThreadId::new();
+    app.chat_widget
+        .select_status_worktree(codex_protocol::StatusLineWorktree {
+            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+            root: selected.clone().into(),
+            git_common_dir: original.join(".git").into(),
+        });
+    for error in ["creation failed", "creation cancelled"] {
+        app.pending_managed_worktree_creation = true;
+        app.finish_managed_worktree(crate::app_event::ManagedWorktreeCreated {
+            source_thread_id: thread,
+            source_cwd: original.clone(),
+            mode: crate::app_event::ManagedWorktreeMode::New,
+            name: None,
+            result: Err(error.into()),
+        })
+        .await;
+        assert!(!app.pending_managed_worktree_creation);
+        assert!(app.pending_managed_worktree_transition.is_none());
+        assert_eq!(app.chat_widget.status_context_cwd(), selected.as_path());
+        assert_eq!(app.config.cwd, original);
     }
     Ok(())
 }

@@ -1048,6 +1048,16 @@ pub struct ThreadMetadataUpdateParams {
     #[experimental("thread/metadata/update.daybreakEnabled")]
     #[ts(optional = nullable)]
     pub daybreak_enabled: Option<bool>,
+    /// Reporting checkout only: omit to preserve, null to clear, or provide a record to set.
+    /// Updating this field is allowed during a turn and never changes execution settings.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::serde_helpers::serialize_double_option",
+        deserialize_with = "crate::protocol::serde_helpers::deserialize_double_option"
+    )]
+    #[ts(optional = nullable, as = "Option<codex_protocol::StatusLineWorktree>")]
+    pub status_line_worktree: Option<Option<codex_protocol::StatusLineWorktree>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

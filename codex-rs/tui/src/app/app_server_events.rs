@@ -162,6 +162,16 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        if let ServerNotification::ThreadDeleted(deleted) = &notification
+            && let Ok(thread_id) = ThreadId::from_string(&deleted.thread_id)
+        {
+            app_server_client
+                .status_worktree_tools()
+                .forget_thread(thread_id);
+            if self.chat_widget.thread_id() == Some(thread_id) {
+                self.chat_widget.set_status_worktree_live(false);
+            }
+        }
         // A picker can leave an old runtime's close notification queued while the same thread
         // is resumed. Thread IDs survive reloads, so confirm that the displayed thread is still
         // unloaded before routing a close that would exit the TUI or switch away from it.
@@ -669,16 +679,28 @@ impl App {
                 .thread_tool_transport()
                 .configure(&mut thread_start_params);
             let features = self.config.features.get().clone();
+            let status_worktrees = app_server_client.status_worktree_tools();
             let task = tokio::spawn(async move {
-                let response = crate::dynamic_tools::execute(
-                    request_handle,
-                    params,
-                    thread_start_params,
-                    features,
-                    status_updates,
-                    Some(&app_event_tx),
-                )
-                .await;
+                let response = if params.tool == crate::status_line_worktree::TOOL_NAME {
+                    status_worktrees
+                        .execute(
+                            request_handle,
+                            params.thread_id,
+                            params.arguments,
+                            &app_event_tx,
+                        )
+                        .await
+                } else {
+                    crate::dynamic_tools::execute(
+                        request_handle,
+                        params,
+                        thread_start_params,
+                        features,
+                        status_updates,
+                        Some(&app_event_tx),
+                    )
+                    .await
+                };
                 if inherits_task_tools
                     && response.success
                     && let [

@@ -13,6 +13,8 @@ mod resize_reflow;
 #[cfg(unix)]
 mod screen_reader;
 mod status_indicator;
+#[cfg(unix)]
+mod status_worktree;
 mod vt100_history;
 mod vt100_live_commit;
 #[cfg(unix)]

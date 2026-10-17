@@ -125,6 +125,12 @@ impl App {
         app_server: &mut AppServerSession,
         destination: Option<ThreadId>,
     ) {
+        if let Some(current) = self.chat_widget.thread_id()
+            && destination != Some(current)
+        {
+            app_server.status_worktree_tools().cancel_pending(current);
+            self.chat_widget.set_status_worktree_live(false);
+        }
         let thread_ids: Vec<_> = self.thread_event_channels.keys().copied().collect();
         for thread_id in thread_ids {
             if self.voice_owner_thread_id() == Some(thread_id)

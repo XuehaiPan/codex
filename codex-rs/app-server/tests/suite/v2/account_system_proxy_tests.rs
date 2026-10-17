@@ -73,6 +73,10 @@ async fn browser_login_bootstraps_through_system_proxy() -> Result<()> {
                     .kill_on_drop(true)
                     .env(TEST_MODE, mode)
                     .env("CODEX_APP_SERVER_LOGIN_ISSUER", BLOCKED_ORIGIN)
+                    // Reqwest also discovers OS proxies after proxy env vars are removed.
+                    // Keep the first attempt local so it fails to connect; the fallback's
+                    // explicitly cached system route still reaches the mock proxy.
+                    .env("NO_PROXY", "127.0.0.1,localhost")
                     .env_remove("OPENAI_API_KEY")
                     .env_remove("CODEX_API_KEY")
                     .output(),

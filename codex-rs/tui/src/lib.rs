@@ -222,6 +222,10 @@ mod startup_presentation;
 mod startup_recovery;
 mod status;
 mod status_indicator_widget;
+mod status_line_refresh;
+mod status_line_worktree;
+#[cfg(test)]
+mod status_test_support;
 mod streaming;
 mod style;
 mod subscription;

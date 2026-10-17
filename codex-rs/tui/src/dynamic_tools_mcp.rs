@@ -75,6 +75,15 @@ impl ThreadToolTransport {
     }
 
     pub(crate) fn configure(&self, params: &mut ThreadStartParams) {
+        if !matches!(self, Self::Disabled) {
+            let instructions = params.developer_instructions.get_or_insert_default();
+            if !instructions.contains(crate::status_line_worktree::GUIDANCE) {
+                if !instructions.is_empty() {
+                    instructions.push_str("\n\n");
+                }
+                instructions.push_str(crate::status_line_worktree::GUIDANCE);
+            }
+        }
         match self {
             Self::Disabled => params.dynamic_tools = None,
             Self::Dynamic => {
@@ -101,6 +110,7 @@ impl ThreadToolTransport {
 pub(crate) struct ToolServices {
     pub(crate) task_tools: bool,
     pub(crate) worktrees: Option<crate::managed_worktree_tools::ManagedWorktreeTools>,
+    pub(crate) status_worktrees: crate::status_line_worktree::StatusLineWorktreeTools,
 }
 
 impl ToolServices {
@@ -117,6 +127,7 @@ type ToolConnection = Arc<RwLock<Option<(AppServerRequestHandle, AppEventSender)
 
 pub(crate) struct DynamicToolMcpServer {
     connection: ToolConnection,
+    pub(crate) status_worktrees: crate::status_line_worktree::StatusLineWorktreeTools,
     config: Value,
     namespace: &'static str,
     task: JoinHandle<()>,
@@ -124,6 +135,7 @@ pub(crate) struct DynamicToolMcpServer {
 
 impl DynamicToolMcpServer {
     pub(crate) fn suspend(&self) {
+        self.status_worktrees.invalidate_connection();
         *self
             .connection
             .write()
@@ -131,6 +143,7 @@ impl DynamicToolMcpServer {
     }
 
     pub(crate) fn reconnect(&self, handle: AppServerRequestHandle, events: AppEventSender) {
+        self.status_worktrees.invalidate_connection();
         *self
             .connection
             .write()
@@ -179,6 +192,7 @@ impl DynamicToolMcpServer {
         }
         let connection = Arc::new(RwLock::new(Some((request_handle, app_event_tx))));
         let namespace = services.namespace();
+        let status_worktrees = services.status_worktrees.clone();
         let handler = DynamicToolMcpHandler {
             connection: Arc::clone(&connection),
             thread_start_params,
@@ -206,6 +220,7 @@ impl DynamicToolMcpServer {
         });
         Ok(Self {
             connection,
+            status_worktrees,
             config: server_config,
             namespace,
             task,
@@ -215,6 +230,7 @@ impl DynamicToolMcpServer {
 
 impl Drop for DynamicToolMcpServer {
     fn drop(&mut self) {
+        self.status_worktrees.invalidate_connection();
         self.task.abort();
     }
 }
@@ -259,7 +275,9 @@ impl ServerHandler for DynamicToolMcpHandler {
         let mut specs = if self.services.task_tools {
             dynamic_tools::tool_specs()
         } else {
-            Vec::new()
+            vec![DynamicToolSpec::Function(
+                crate::status_line_worktree::tool_spec(),
+            )]
         };
         if self.services.worktrees.is_some() {
             specs.extend(crate::managed_worktree_tool_specs::specs());
@@ -348,7 +366,17 @@ impl ServerHandler for DynamicToolMcpHandler {
             .ok_or_else(|| {
                 McpError::internal_error("TUI is reconnecting; tool was not sent", None)
             })?;
-        let response = if matches!(
+        let response = if params.tool == crate::status_line_worktree::TOOL_NAME {
+            self.services
+                .status_worktrees
+                .execute(
+                    request_handle,
+                    params.thread_id,
+                    params.arguments,
+                    &app_event_tx,
+                )
+                .await
+        } else if matches!(
             params.tool.as_str(),
             "create_worktree" | "get_worktree_creation_status" | "list_worktrees"
         ) {

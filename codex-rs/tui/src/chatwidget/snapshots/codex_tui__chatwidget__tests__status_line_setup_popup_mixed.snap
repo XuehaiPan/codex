@@ -10,7 +10,7 @@ expression: status_line_popup_snapshot(&mut chat)
 › [x] Use theme colors      Apply colors from the active /theme
   ───────────────────────
   [x] project-name          Project name (omitted when unavailable)
-  [x] git-branch            Current Git branch (omitted when unavailable)
+  [x] git-branch            Reporting checkout branch (omitted when unavailable)
   [x] thread-title          Current thread title, or thread identifier when unnamed
   [x] daybreak              Whether Daybreak is enabled for this thread
   [ ] model                 Current model name

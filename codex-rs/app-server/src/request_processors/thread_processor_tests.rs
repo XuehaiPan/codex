@@ -521,6 +521,7 @@ mod thread_processor_behavior_tests {
             section_entered_at: None,
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             cwd: PathBuf::from("/tmp"),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,

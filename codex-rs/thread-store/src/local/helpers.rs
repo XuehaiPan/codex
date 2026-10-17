@@ -163,6 +163,7 @@ pub(super) fn stored_thread_from_rollout_item(
         section_entered_at: None,
         project_id: item.project_id,
         daybreak_enabled: item.daybreak_enabled,
+        status_line_worktree: None,
         cwd: item.cwd.unwrap_or_default(),
         cli_version: item.cli_version.unwrap_or_default(),
         originator: item.originator,

@@ -47,6 +47,10 @@ pub(crate) struct ThreadSessionState {
     /// Named or implicit built-in profile that produced `permission_profile`,
     /// when the server knows it.
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
+    /// Reporting-only metadata; never used to retarget permissions or execution defaults.
+    pub(crate) status_line_worktree: Option<codex_protocol::StatusLineWorktree>,
+    /// Executor identity for reporting probes; the current command runner supports the server host.
+    pub(crate) status_line_environment_id: String,
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) runtime_workspace_roots: Vec<AbsolutePathBuf>,
     pub(crate) instruction_source_paths: Vec<PathUri>,
@@ -58,6 +62,20 @@ pub(crate) struct ThreadSessionState {
 }
 
 impl ThreadSessionState {
+    /// Keep the saved selection and its executor together when ingesting a server thread.
+    pub(crate) fn update_status_line_context(
+        &mut self,
+        thread: &codex_app_server_protocol::Thread,
+    ) {
+        self.status_line_worktree = thread.status_line_worktree.clone();
+        self.status_line_environment_id = thread
+            .environments
+            .as_ref()
+            .and_then(|environments| environments.first())
+            .map(|environment| environment.environment_id.clone())
+            .unwrap_or_else(|| codex_exec_server::LOCAL_ENVIRONMENT_ID.into());
+    }
+
     pub(crate) fn set_cwd_retargeting_implicit_runtime_workspace_root(
         &mut self,
         cwd: AbsolutePathBuf,

@@ -622,6 +622,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
             thread_id: thread.id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/sidebar-pr".to_string())),
@@ -725,6 +726,7 @@ async fn thread_metadata_update_sanitizes_git_origin_before_persisting() -> Resu
             thread_id: thread.id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: None,
@@ -807,6 +809,7 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
             thread_id: thread.id,
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: None,
@@ -859,6 +862,7 @@ async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
             thread_id: thread.id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: Some(Some(serde_json::from_value(json!({"environmentId":"local","root":"/missing/worktree","gitCommonDir":"/repo/.git"}))?)),
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/ephemeral".to_string())),
@@ -935,6 +939,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
             thread_id: thread_id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/stored-thread".to_string())),
@@ -1023,6 +1028,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
             thread_id: thread_id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/loaded-thread".to_string())),
@@ -1096,6 +1102,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread()
             thread_id: thread_id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: None,
                 branch: Some(Some("feature/archived-thread".to_string())),
@@ -1161,6 +1168,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
             thread_id: thread_id.clone(),
             project_id: None,
             daybreak_enabled: None,
+            status_line_worktree: None,
             git_info: Some(ThreadMetadataGitInfoUpdateParams {
                 sha: Some(None),
                 branch: Some(None),
@@ -1213,4 +1221,92 @@ fn mock_responses_config(server_uri: &str) -> MockResponsesConfig {
     MockResponsesConfig::new(server_uri)
         .with_root_config("suppress_unstable_features_warning = true")
         .enable_feature(Feature::Sqlite)
+}
+
+#[tokio::test]
+async fn status_worktree_metadata_round_trip() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let home = TempDir::new()?;
+    mock_responses_config(&server.uri()).write(home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let started = mcp
+        .start_thread(ThreadStartParams {
+            model: Some("mock-model".into()),
+            ..Default::default()
+        })
+        .await?;
+    let original = started.thread;
+    assert_eq!(original.status_line_worktree, None);
+    let selection = json!({"environmentId": "remote", "root": "/workspace/feature", "gitCommonDir": "/workspace/repo/.git"});
+    for value in [selection.clone(), Value::Null] {
+        let request = mcp
+            .send_request(
+                "thread/metadata/update",
+                Some(json!({"threadId": original.id, "statusLineWorktree": value})),
+            )
+            .await?;
+        let updated: ThreadMetadataUpdateResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+        assert_eq!(
+            serde_json::to_value(&updated.thread)?["statusLineWorktree"],
+            value
+        );
+        assert_eq!(updated.thread.id, original.id);
+        assert_eq!(updated.thread.session_id, original.session_id);
+        assert_eq!(updated.thread.cwd, original.cwd);
+        assert_eq!(updated.thread.environments, original.environments);
+        let request = mcp
+            .send_request(
+                "thread/metadata/update",
+                Some(json!({"threadId": original.id, "daybreakEnabled": false})),
+            )
+            .await?;
+        let updated: ThreadMetadataUpdateResponse =
+            timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+        assert_eq!(
+            serde_json::to_value(&updated.thread)?["statusLineWorktree"],
+            value
+        );
+        for include_turns in [false, true] {
+            let request = mcp
+                .send_thread_read_request(ThreadReadParams {
+                    thread_id: original.id.clone(),
+                    include_turns,
+                })
+                .await?;
+            let read: ThreadReadResponse =
+                timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+            assert_eq!(
+                serde_json::to_value(read.thread)?["statusLineWorktree"],
+                value
+            );
+        }
+        if !value.is_null() {
+            let request = mcp
+                .send_request("thread/resume", Some(json!({"threadId": original.id})))
+                .await?;
+            let resumed: ThreadResumeResponse =
+                timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+            assert_eq!(
+                serde_json::to_value(resumed.thread)?["statusLineWorktree"],
+                value
+            );
+            let request = mcp
+                .send_request("thread/fork", Some(json!({"threadId": original.id})))
+                .await?;
+            let forked: codex_app_server_protocol::ThreadForkResponse =
+                timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request)).await??;
+            assert_ne!(forked.thread.id, original.id);
+            assert_eq!(forked.thread.status_line_worktree, None);
+        }
+    }
+    // The older wire contract still decodes when the additive field is absent.
+    let mut legacy = serde_json::to_value(original)?;
+    legacy.as_object_mut().unwrap().remove("statusLineWorktree");
+    let legacy: codex_app_server_protocol::Thread = serde_json::from_value(legacy)?;
+    assert_eq!(legacy.status_line_worktree, None);
+    Ok(())
 }

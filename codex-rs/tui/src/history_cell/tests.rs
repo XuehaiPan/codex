@@ -601,6 +601,8 @@ fn image_generation_call_renders_saved_path() {
 
 fn session_configured_event(model: &str) -> ThreadSessionState {
     ThreadSessionState {
+        status_line_environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.into(),
+        status_line_worktree: None,
         daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
